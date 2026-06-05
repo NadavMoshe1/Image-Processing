@@ -1,0 +1,4 @@
+# Dataset archives (too large for git)
+bdd100k_images_10k.zip
+bdd100k_labels.zip
+*.zip
