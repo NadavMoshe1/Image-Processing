@@ -1,4 +1,48 @@
-# Dataset archives (too large for git)
-bdd100k_images_10k.zip
-bdd100k_labels.zip
+# --- Dataset (too large for git — download locally, see README) ---
+data/bdd100K_images_10k/
+data/bdd100k_label/
+data/bdd100k_seg_maps/
+bdd100k_drivable_maps/
+data/distorted/
+data/enhanced/
 *.zip
+
+# --- Course materials (local copy) ---
+3002_CousreProject.pdf
+
+# --- Generated outputs ---
+outputs/
+runs/
+wandb/
+logs/
+
+# --- Model checkpoints ---
+*.pt
+*.pth
+*.onnx
+*.weights
+weights/
+checkpoints/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.env
+.venv/
+venv/
+env/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

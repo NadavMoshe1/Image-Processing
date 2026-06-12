@@ -1,0 +1,11 @@
+# Core (EDA + ORB + distortions)
+opencv-python>=4.8
+matplotlib>=3.7
+numpy>=1.24
+scikit-image>=0.21
+tqdm>=4.65
+
+# Deep learning (YOLOv8 + SegFormer) — install after core if needed
+torch>=2.0
+ultralytics>=8.0
+transformers>=4.36
