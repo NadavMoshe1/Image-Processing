@@ -16,6 +16,34 @@ from src.distortions import apply_distortion, compute_snr_db, default_levels, le
 from src.enhancements import enhance_for_distortion
 from src.paths import DISTORTED_DIR, ENHANCED_DIR, FIGURES_DIR, IMAGES_ROOT, DISTORTION_TYPES, ensure_output_dirs
 
+# Labels used only in distortion_preview_*.png
+_PREVIEW_DISTORTION_NAMES = {
+    "noise": "Gaussian Noise",
+    "low_light": "Low Light",
+    "jpeg": "JPEG Compression",
+}
+_PREVIEW_ENHANCEMENT_NAMES = {
+    "noise": "NLM Denoising",
+    "low_light": "CLAHE",
+    "jpeg": "Bilateral + Interpolation",
+}
+
+
+def _preview_distorted_label(
+    distortion: str,
+    level: float | int,
+    clean: np.ndarray,
+    distorted: np.ndarray,
+) -> str:
+    measured_snr = compute_snr_db(clean, distorted)
+    if distortion == "noise":
+        return f"Target SNR: {level} dB\nMeasured SNR: {measured_snr:.1f} dB"
+    if distortion == "low_light":
+        return f"Gamma: {level:g}\nSNR vs clean: {measured_snr:.1f} dB"
+    if distortion == "jpeg":
+        return f"JPEG quality: {int(level)}"
+    return str(level)
+
 
 def list_images(split: str, limit: int | None = None, seed: int = 42) -> list[Path]:
     images = sorted((IMAGES_ROOT / split).glob("*.jpg"))
@@ -123,23 +151,41 @@ def save_preview(split: str, preview_seed: int, output_path: Path) -> None:
         distorted = apply_distortion(clean, distortion, level, rng=rng)
         enhanced = enhance_for_distortion(distorted, distortion)
         row_images = [clean, distorted, enhanced]
-        row_titles = [
-            "Original",
-            f"{distortion}\n({level_tag(distortion, level)})",
-            f"{distortion} + enhance",
-        ]
 
-        for col, (vis, title) in enumerate(zip(row_images, row_titles)):
+        for col, vis in enumerate(row_images):
             ax = axes[row, col]
             ax.imshow(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
             ax.axis("off")
             if row == 0:
-                ax.set_title(column_titles[col], fontsize=11)
+                ax.set_title(column_titles[col], fontsize=12, fontweight="bold")
             if col == 0:
-                ax.set_ylabel(distortion, rotation=90, labelpad=36, fontsize=11)
+                ax.set_ylabel(
+                    _PREVIEW_DISTORTION_NAMES[distortion],
+                    rotation=90,
+                    labelpad=44,
+                    fontsize=11,
+                    fontweight="bold",
+                )
+                caption = "Clean image"
+            elif col == 1:
+                caption = _preview_distorted_label(distortion, level, clean, distorted)
+            else:
+                caption = _PREVIEW_ENHANCEMENT_NAMES[distortion]
 
-    fig.suptitle(f"Distortion preview — {image_path.name}", fontsize=12, y=1.01)
+            ax.text(
+                0.5,
+                -0.05,
+                caption,
+                transform=ax.transAxes,
+                ha="center",
+                va="top",
+                fontsize=9.5,
+                linespacing=1.4,
+            )
+
+    fig.suptitle(f"Distortion preview — {image_path.name}", fontsize=13, y=1.0)
     fig.tight_layout()
+    fig.subplots_adjust(hspace=0.45)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)

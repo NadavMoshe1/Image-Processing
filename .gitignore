@@ -1,11 +1,9 @@
 # --- Dataset (too large for git — download locally, see README) ---
-data/bdd100K_images_10k/
-data/bdd100k_label/
-data/bdd100k_seg_maps/
+data/
 bdd100k_drivable_maps/
-data/distorted/
-data/enhanced/
 *.zip
+bdd100k_images_10k.zip
+bdd100k_labels.zip
 
 # --- Course materials (local copy) ---
 3002_CousreProject.pdf

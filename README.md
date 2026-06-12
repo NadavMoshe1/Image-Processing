@@ -101,6 +101,114 @@ Enhanced images go to `data/enhanced/{distortion}/{level}/{split}/`.
 | `low_light` | gamma 0.75, 0.5, 0.35, 0.2 | CLAHE |
 | `jpeg` | quality 90, 50, 20, 10 | upscale + bilateral filter |
 
+## ORB Feature Matching (Task 3)
+
+Match ORB descriptors from the **clean** image (reference) to a **query** image (distorted or enhanced).  
+**Metric:** matching ratio = good matches / keypoints on clean image (Lowe ratio test, threshold 0.75).
+
+```powershell
+python -m src.run_orb --mode all --split train --num-images 10 --seed 42
+```
+
+Outputs:
+- `outputs/metrics/orb_results_train.json` — full per-image results
+- `outputs/figures/orb_matching_train.png` — curves (distorted vs enhanced)
+- `outputs/metrics/orb_results_train.md` — summary table
+- `outputs/figures/orb_keypoints_preview_train.png` — ORB keypoints on baseline / distorted / enhanced
+
+```powershell
+python -m src.visualize_orb --preview-seed 99 --matches
+```
+
+### Results (train, 10 images, seed=42)
+
+| Distortion | Level | Distorted | Enhanced | Recovery |
+|------------|-------|-----------|----------|----------|
+| noise | SNR 30 dB | 0.941 | 0.557 | -0.384 |
+| noise | SNR 20 dB | 0.868 | 0.559 | -0.309 |
+| noise | SNR 10 dB | 0.652 | 0.519 | -0.133 |
+| noise | SNR 5 dB | 0.483 | 0.433 | -0.049 |
+| low_light | gamma 0.75 | 0.812 | 0.562 | -0.249 |
+| low_light | gamma 0.5 | 0.483 | 0.613 | +0.130 |
+| low_light | gamma 0.35 | 0.262 | 0.422 | +0.160 |
+| low_light | gamma 0.2 | 0.088 | 0.125 | +0.037 |
+| jpeg | quality 90 | 0.961 | 0.697 | -0.263 |
+| jpeg | quality 50 | 0.893 | 0.691 | -0.202 |
+| jpeg | quality 20 | 0.818 | 0.663 | -0.155 |
+| jpeg | quality 10 | 0.693 | 0.595 | -0.098 |
+
+*Clean baseline matching ratio: **1.000***
+
+![ORB matching ratio](outputs/figures/orb_matching_train.png)
+
+**Observations:** Noise and JPEG degrade matching monotonically. CLAHE recovers low-light matching at medium–strong darkening (gamma 0.35–0.5). NLM and bilateral smoothing can *reduce* ORB matching because blurring changes binary descriptors — a useful finding for the report.
+
+## Detection Baseline — YOLOv8 (10 images)
+
+Images with **both** detection JSON + segmentation GT, same 10-image set (seed=42).
+
+```powershell
+python -m src.run_detection --mode baseline --split train --num-images 10 --seed 42
+```
+
+| Metric | Value |
+|--------|-------|
+| Mean recall @ IoU 0.5 | 0.311 |
+| Mean precision | 0.680 |
+| Mean matched IoU | 0.843 |
+
+| Class | Recall |
+|-------|--------|
+| car | 0.43 |
+| truck | 0.38 |
+| person | 0.21 |
+| traffic light | 0.33 |
+
+Outputs: `outputs/metrics/detection_baseline_train.json`, `outputs/baseline/detection/train/*_gt_pred.jpg`, `outputs/figures/detection_baseline_train.png`
+
+![Detection baseline](outputs/figures/detection_baseline_train.png)
+
+**Robustness curves** (distorted vs enhanced, same 10 images):
+
+```powershell
+python -m src.run_detection --mode robustness --split train --num-images 10 --seed 42
+```
+
+![Detection robustness](outputs/figures/detection_robustness_train.png)
+
+## Segmentation Baseline — SegFormer (10 images)
+
+Same 10-image set. Model: `nvidia/segformer-b0-finetuned-cityscapes-512-1024` (Cityscapes classes align with BDD100K trainId).
+
+```powershell
+python -m src.run_segmentation --mode baseline --split train --num-images 10 --seed 42
+```
+
+| Metric | Value |
+|--------|-------|
+| Mean mIoU | **0.528** |
+
+| Class | mIoU |
+|-------|------|
+| road | 0.86 |
+| sky | 0.80 |
+| car | 0.75 |
+| vegetation | 0.74 |
+| building | 0.62 |
+| sidewalk | 0.46 |
+
+Outputs: `outputs/metrics/segmentation_baseline_train.json`, `outputs/baseline/segmentation/train/*_gt_pred.jpg`, `outputs/figures/segmentation_baseline_train.png`
+
+![Segmentation baseline](outputs/figures/segmentation_baseline_train.png)
+
+**Robustness curves** (distorted vs enhanced, same 10 images):
+
+```powershell
+python -m src.run_segmentation --mode robustness --split train --num-images 10 --seed 42
+```
+
+![Segmentation robustness](outputs/figures/segmentation_robustness_train.png)
+
 ## Repository Structure
 
 ```
