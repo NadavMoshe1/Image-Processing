@@ -8,8 +8,12 @@ bdd100k_labels.zip
 # --- Course materials (local copy) ---
 3002_CousreProject.pdf
 
-# --- Generated outputs ---
-outputs/
+# --- Generated outputs (figures are tracked for GitHub README) ---
+outputs/baseline/
+outputs/distorted/
+outputs/enhanced/
+outputs/metrics/
+outputs/finetune/
 runs/
 wandb/
 logs/
