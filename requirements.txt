@@ -9,3 +9,4 @@ tqdm>=4.65
 torch>=2.0
 ultralytics>=8.0
 transformers>=4.36
+PyYAML>=6.0

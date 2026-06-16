@@ -46,6 +46,22 @@ YOLO_TO_BDD_CATEGORY = {
     "stop sign": "traffic sign",
 }
 
+# BDD detection classes used for YOLO fine-tuning (stable class ids 0..N-1)
+BDD_DETECTION_CLASS_NAMES = [
+    "car",
+    "truck",
+    "bus",
+    "person",
+    "rider",
+    "bike",
+    "motor",
+    "traffic light",
+    "traffic sign",
+    "train",
+]
+
+BDD_CATEGORY_TO_YOLO_ID = {name: idx for idx, name in enumerate(BDD_DETECTION_CLASS_NAMES)}
+
 BDD_DETECTION_COLORS = {
     "car": (0, 255, 0),
     "truck": (255, 128, 0),
@@ -124,6 +140,57 @@ def has_detection_and_seg(split: str, stem: str, label_index: dict[str, Path]) -
     if label_path is None or not load_detection_boxes(label_path):
         return False
     return seg_id_path(split, stem).exists()
+
+
+def has_detection_labels(stem: str, label_index: dict[str, Path]) -> bool:
+    label_path = label_index.get(stem)
+    if label_path is None:
+        return False
+    return bool(_yolo_eligible_boxes(load_detection_boxes(label_path)))
+
+
+def _yolo_eligible_boxes(boxes: list[dict]) -> list[dict]:
+    return [b for b in boxes if b["category"] in BDD_CATEGORY_TO_YOLO_ID]
+
+
+def bdd_boxes_to_yolo_lines(boxes: list[dict], img_w: int, img_h: int) -> list[str]:
+    """Convert BDD box2d dicts to YOLO label lines (class cx cy w h, normalized)."""
+    lines: list[str] = []
+    for box in _yolo_eligible_boxes(boxes):
+        cls_id = BDD_CATEGORY_TO_YOLO_ID[box["category"]]
+        x1, y1, x2, y2 = box["x1"], box["y1"], box["x2"], box["y2"]
+        cx = (x1 + x2) / 2.0 / img_w
+        cy = (y1 + y2) / 2.0 / img_h
+        w = (x2 - x1) / img_w
+        h = (y2 - y1) / img_h
+        cx = float(np.clip(cx, 0.0, 1.0))
+        cy = float(np.clip(cy, 0.0, 1.0))
+        w = float(np.clip(w, 0.0, 1.0))
+        h = float(np.clip(h, 0.0, 1.0))
+        if w <= 0.0 or h <= 0.0:
+            continue
+        lines.append(f"{cls_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+    return lines
+
+
+def select_detection_images(
+    split: str,
+    num_images: int,
+    seed: int,
+    label_index: dict[str, Path] | None = None,
+) -> list[Path]:
+    """Images with at least one YOLO-eligible detection box (seg GT not required)."""
+    label_index = label_index or build_label_index()
+    candidates = [
+        p
+        for p in sorted((IMAGES_ROOT / split).glob("*.jpg"))
+        if has_detection_labels(p.stem, label_index)
+    ]
+    if not candidates:
+        return []
+    n = min(num_images, len(candidates))
+    rng = random.Random(seed)
+    return sorted(rng.sample(candidates, n))
 
 
 def select_paired_images(

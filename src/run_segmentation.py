@@ -23,7 +23,7 @@ from src.bdd100k_utils import (
 )
 from src.distortions import apply_distortion, default_levels
 from src.enhancements import enhance_for_distortion
-from src.evaluate import compute_miou, save_robustness_summary_plot
+from src.evaluate import compute_miou, save_per_class_miou_chart, save_robustness_summary_plot
 from src.paths import BASELINE_SEGMENTATION_DIR, DISTORTION_TYPES, FIGURES_DIR, METRICS_DIR, ensure_output_dirs
 from src.robustness import level_seed
 
@@ -155,6 +155,12 @@ def run_baseline(split: str, num_images: int, seed: int, model_id: str) -> dict:
     out_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     save_segmentation_preview_grid(image_paths[: min(3, len(image_paths))], model, processor, device, split)
+    save_per_class_miou_chart(
+        per_class_mean,
+        output_path=FIGURES_DIR / f"segmentation_per_class_miou_{split}.png",
+        title=f"SegFormer per-class IoU — {split} (N={len(per_image)})",
+        mean_miou=mean_miou,
+    )
     print(f"Mean mIoU: {mean_miou:.3f}")
     print(f"Saved metrics: {out_json}")
     print(f"Saved per-image GT|Pred panels: {vis_dir}")

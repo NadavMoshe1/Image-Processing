@@ -14,6 +14,7 @@ DRIVABLE_COLOR_ROOT = PROJECT_ROOT / "bdd100k_drivable_maps" / "color_labels"
 
 DISTORTED_DIR = DATA_DIR / "distorted"
 ENHANCED_DIR = DATA_DIR / "enhanced"
+YOLO_DATASET_ROOT = DATA_DIR / "yolo_distorted"
 
 # --- Outputs ---
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
@@ -22,6 +23,7 @@ BASELINE_DIR = OUTPUTS_DIR / "baseline"
 DISTORTED_OUTPUT_DIR = OUTPUTS_DIR / "distorted"
 ENHANCED_OUTPUT_DIR = OUTPUTS_DIR / "enhanced"
 METRICS_DIR = OUTPUTS_DIR / "metrics"
+FINETUNE_DIR = OUTPUTS_DIR / "finetune"
 
 BASELINE_DETECTION_DIR = BASELINE_DIR / "detection"
 BASELINE_SEGMENTATION_DIR = BASELINE_DIR / "segmentation"
@@ -47,5 +49,7 @@ def ensure_output_dirs() -> None:
         METRICS_DIR,
         DISTORTED_DIR,
         ENHANCED_DIR,
+        YOLO_DATASET_ROOT,
+        FINETUNE_DIR,
     ):
         path.mkdir(parents=True, exist_ok=True)

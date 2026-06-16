@@ -191,6 +191,133 @@ def save_preview(split: str, preview_seed: int, output_path: Path) -> None:
     plt.close(fig)
 
 
+def _level_column_title(distortion: str, level: float | int) -> str:
+    if distortion == "noise":
+        return f"SNR {int(level)} dB"
+    if distortion == "low_light":
+        return f"γ = {level:g}"
+    if distortion == "jpeg":
+        return f"Q = {int(level)}"
+    return str(level)
+
+
+def save_intensity_preview(split: str, preview_seed: int, output_path: Path) -> None:
+    """Grid: one row per distortion, columns = clean + all intensity levels."""
+    images = list_images(split, limit=1, seed=preview_seed)
+    if not images:
+        return
+
+    image_path = images[0]
+    clean = cv2.imread(str(image_path))
+    if clean is None:
+        return
+
+    rng = np.random.default_rng(preview_seed)
+    n_rows = len(DISTORTION_TYPES)
+    n_cols = 5  # clean + 4 levels
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 4.2 * n_rows))
+    if n_rows == 1:
+        axes = np.expand_dims(axes, axis=0)
+
+    for row, distortion in enumerate(DISTORTION_TYPES):
+        levels = default_levels(distortion)
+        panels = [clean] + [
+            apply_distortion(clean, distortion, level, rng=rng) for level in levels
+        ]
+        titles = ["Clean"] + [_level_column_title(distortion, lv) for lv in levels]
+
+        for col, (vis, title) in enumerate(zip(panels, titles)):
+            ax = axes[row, col]
+            ax.imshow(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
+            ax.axis("off")
+            if row == 0:
+                ax.set_title(title, fontsize=11, fontweight="bold")
+            if col == 0:
+                ax.set_ylabel(
+                    _PREVIEW_DISTORTION_NAMES[distortion],
+                    rotation=90,
+                    labelpad=40,
+                    fontsize=11,
+                    fontweight="bold",
+                )
+
+    fig.suptitle(
+        f"Distortion intensity sweep — {image_path.name}",
+        fontsize=13,
+        y=1.0,
+    )
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_enhancement_preview(split: str, preview_seed: int, output_path: Path) -> None:
+    """Grid: one row per distortion — distorted (strongest) vs enhanced side by side."""
+    images = list_images(split, limit=1, seed=preview_seed)
+    if not images:
+        return
+
+    image_path = images[0]
+    clean = cv2.imread(str(image_path))
+    if clean is None:
+        return
+
+    rng = np.random.default_rng(preview_seed)
+    n_rows = len(DISTORTION_TYPES)
+
+    fig, axes = plt.subplots(n_rows, 2, figsize=(10, 4 * n_rows))
+    if n_rows == 1:
+        axes = np.expand_dims(axes, axis=0)
+
+    for row, distortion in enumerate(DISTORTION_TYPES):
+        level = default_levels(distortion)[-1]
+        distorted = apply_distortion(clean, distortion, level, rng=rng)
+        enhanced = enhance_for_distortion(distorted, distortion)
+
+        for col, (vis, title) in enumerate(
+            [
+                (distorted, "Distorted"),
+                (enhanced, "After enhancement"),
+            ]
+        ):
+            ax = axes[row, col]
+            ax.imshow(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
+            ax.axis("off")
+            if row == 0:
+                ax.set_title(title, fontsize=12, fontweight="bold")
+            if col == 0:
+                ax.set_ylabel(
+                    _PREVIEW_DISTORTION_NAMES[distortion],
+                    rotation=90,
+                    labelpad=44,
+                    fontsize=11,
+                    fontweight="bold",
+                )
+                caption = _preview_distorted_label(distortion, level, clean, distorted)
+            else:
+                caption = _PREVIEW_ENHANCEMENT_NAMES[distortion]
+
+            ax.text(
+                0.5,
+                -0.06,
+                caption,
+                transform=ax.transAxes,
+                ha="center",
+                va="top",
+                fontsize=9.5,
+                linespacing=1.4,
+            )
+
+    fig.suptitle(f"Enhancement recovery — {image_path.name}", fontsize=13, y=1.0)
+    fig.tight_layout()
+    fig.subplots_adjust(hspace=0.42)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Apply distortions to BDD100K images.")
     parser.add_argument("--split", default="train", choices=("train", "val", "test"))
@@ -230,9 +357,22 @@ def main() -> None:
     print(f"Manifest: {DISTORTED_DIR / f'manifest_{args.split}.json'}")
 
     if args.preview:
-        preview_path = FIGURES_DIR / f"distortion_preview_{args.split}.png"
-        save_preview(args.split, args.preview_seed, preview_path)
-        print(f"Preview: {preview_path}")
+        save_preview(
+            args.split,
+            args.preview_seed,
+            FIGURES_DIR / f"distortion_preview_{args.split}.png",
+        )
+        save_intensity_preview(
+            args.split,
+            args.preview_seed,
+            FIGURES_DIR / f"distortion_intensity_{args.split}.png",
+        )
+        save_enhancement_preview(
+            args.split,
+            args.preview_seed,
+            FIGURES_DIR / f"enhancement_preview_{args.split}.png",
+        )
+        print(f"Previews saved to {FIGURES_DIR}")
 
 
 if __name__ == "__main__":

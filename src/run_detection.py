@@ -13,6 +13,7 @@ from tqdm import tqdm
 from ultralytics import YOLO
 
 from src.bdd100k_utils import (
+    BDD_CATEGORY_TO_YOLO_ID,
     YOLO_TO_BDD_CATEGORY,
     build_label_index,
     draw_detection_boxes,
@@ -22,9 +23,29 @@ from src.bdd100k_utils import (
 )
 from src.distortions import apply_distortion, default_levels
 from src.enhancements import enhance_for_distortion
-from src.evaluate import box_iou, evaluate_detection_boxes, save_robustness_summary_plot
-from src.paths import BASELINE_DETECTION_DIR, DISTORTION_TYPES, FIGURES_DIR, METRICS_DIR, ensure_output_dirs
+from src.evaluate import (
+    box_iou,
+    evaluate_detection_boxes,
+    save_comparison_bars,
+    save_per_class_recall_chart,
+    save_robustness_summary_plot,
+)
+from src.paths import (
+    BASELINE_DETECTION_DIR,
+    DISTORTION_TYPES,
+    FIGURES_DIR,
+    FINETUNE_DIR,
+    METRICS_DIR,
+    ensure_output_dirs,
+)
 from src.robustness import level_seed
+from src.yolo_dataset import (
+    build_distorted_yolo_dataset,
+    dataset_root,
+    default_finetune_level,
+    load_manifest,
+)
+from src.distortions import level_tag
 
 
 def yolo_predictions_to_boxes(result, conf_thresh: float = 0.25) -> list[dict]:
@@ -38,8 +59,8 @@ def yolo_predictions_to_boxes(result, conf_thresh: float = 0.25) -> list[dict]:
             continue
         cls_id = int(box.cls[0])
         yolo_name = names[cls_id]
-        bdd_cat = YOLO_TO_BDD_CATEGORY.get(yolo_name)
-        if bdd_cat is None:
+        bdd_cat = YOLO_TO_BDD_CATEGORY.get(yolo_name, yolo_name)
+        if bdd_cat not in BDD_CATEGORY_TO_YOLO_ID:
             continue
         x1, y1, x2, y2 = box.xyxy[0].tolist()
         boxes.append(
@@ -131,6 +152,12 @@ def run_baseline(split: str, num_images: int, seed: int, model_name: str) -> dic
     out_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     save_detection_preview_grid(image_paths[: min(3, len(image_paths))], label_index, model, split)
+    per_class_path = FIGURES_DIR / f"detection_per_class_recall_{split}.png"
+    save_per_class_recall_chart(
+        per_class_recall,
+        output_path=per_class_path,
+        title=f"YOLOv8 per-class recall @ IoU 0.5 — {split} (N={len(per_image)})",
+    )
     print(f"Mean recall: {mean_recall:.3f}  precision: {mean_precision:.3f}  matched IoU: {mean_iou:.3f}")
     print(f"Saved metrics: {out_json}")
     print(f"Saved per-image GT|Pred panels: {vis_dir}")
@@ -270,8 +297,173 @@ def run_enhanced(split: str, num_images: int | None, model_name: str) -> None:
     run_robustness(split, num_images or 10, 42, model_name)
 
 
-def run_finetune(split: str, distortion: str, model_name: str) -> None:
-    raise NotImplementedError("Implemented in Step 8")
+def run_finetune(
+    split: str,
+    distortion: str,
+    model_name: str,
+    *,
+    level: float | int | None = None,
+    num_train: int = 300,
+    num_val: int = 50,
+    seed: int = 42,
+    epochs: int = 30,
+    batch: int = 8,
+    imgsz: int = 640,
+    rebuild_dataset: bool = False,
+) -> dict:
+    """Build distorted YOLO dataset and fine-tune YOLOv8."""
+    ensure_output_dirs()
+    level = level if level is not None else default_finetune_level(distortion)
+    if distortion == "jpeg":
+        level = int(level)
+
+    build_distorted_yolo_dataset(
+        distortion,
+        level,
+        split=split,
+        num_train=num_train,
+        num_val=num_val,
+        seed=seed,
+        rebuild=rebuild_dataset,
+    )
+    root = dataset_root(distortion, level)
+    yaml_path = root / "dataset.yaml"
+    run_name = f"yolo_{distortion}_{level_tag(distortion, level)}"
+
+    model = YOLO(model_name)
+    model.train(
+        data=str(yaml_path),
+        epochs=epochs,
+        imgsz=imgsz,
+        batch=batch,
+        project=str(FINETUNE_DIR),
+        name=run_name,
+        exist_ok=True,
+        verbose=True,
+    )
+
+    best_weights = FINETUNE_DIR / run_name / "weights" / "best.pt"
+    summary = {
+        "split": split,
+        "distortion": distortion,
+        "level": level,
+        "seed": seed,
+        "num_train": num_train,
+        "num_val": num_val,
+        "epochs": epochs,
+        "base_model": model_name,
+        "dataset_yaml": str(yaml_path),
+        "best_weights": str(best_weights),
+        "run_name": run_name,
+    }
+    out_json = METRICS_DIR / f"detection_finetune_{distortion}_{level_tag(distortion, level)}.json"
+    out_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print(f"Fine-tuning complete. Best weights: {best_weights}")
+    print(f"Saved training summary: {out_json}")
+    return summary
+
+
+def run_finetune_eval(
+    split: str,
+    distortion: str,
+    pretrained_model: str,
+    *,
+    level: float | int | None = None,
+    seed: int = 42,
+    conf_thresh: float = 0.25,
+) -> dict:
+    """Compare pretrained vs fine-tuned recall on distorted val images."""
+    ensure_output_dirs()
+    level = level if level is not None else default_finetune_level(distortion)
+    if distortion == "jpeg":
+        level = int(level)
+
+    manifest = load_manifest(distortion, level)
+    run_name = f"yolo_{distortion}_{level_tag(distortion, level)}"
+    finetuned_weights = FINETUNE_DIR / run_name / "weights" / "best.pt"
+    if not finetuned_weights.exists():
+        raise SystemExit(
+            f"Fine-tuned weights not found: {finetuned_weights}\n"
+            "Run --mode finetune first."
+        )
+
+    label_index = build_label_index()
+    root = dataset_root(distortion, level)
+    val_stems = manifest["val"]
+    if not val_stems:
+        raise SystemExit("No val images in dataset manifest.")
+
+    pretrained = YOLO(pretrained_model)
+    finetuned = YOLO(str(finetuned_weights))
+
+    pretrained_recalls: list[float] = []
+    finetuned_recalls: list[float] = []
+    per_image: list[dict] = []
+
+    for stem in tqdm(val_stems, desc="finetune eval"):
+        val_img_path = root / "images" / "val" / f"{stem}.jpg"
+        if not val_img_path.exists():
+            continue
+        distorted = cv2.imread(str(val_img_path))
+        if distorted is None:
+            continue
+
+        label_path = resolve_label_path(stem, label_index)
+        gt_boxes = load_detection_boxes(label_path)
+        if not gt_boxes:
+            continue
+
+        pred_pre = yolo_predictions_to_boxes(
+            pretrained.predict(distorted, verbose=False)[0], conf_thresh=conf_thresh
+        )
+        pred_ft = yolo_predictions_to_boxes(
+            finetuned.predict(distorted, verbose=False)[0], conf_thresh=conf_thresh
+        )
+        m_pre = evaluate_detection_boxes(gt_boxes, pred_pre)
+        m_ft = evaluate_detection_boxes(gt_boxes, pred_ft)
+        pretrained_recalls.append(m_pre["recall"])
+        finetuned_recalls.append(m_ft["recall"])
+        per_image.append(
+            {
+                "image": f"{stem}.jpg",
+                "pretrained_recall": m_pre["recall"],
+                "finetuned_recall": m_ft["recall"],
+            }
+        )
+
+    mean_pretrained = float(np.mean(pretrained_recalls))
+    mean_finetuned = float(np.mean(finetuned_recalls))
+    tag = level_tag(distortion, level)
+    summary = {
+        "split": split,
+        "distortion": distortion,
+        "level": level,
+        "seed": seed,
+        "num_val_images": len(per_image),
+        "pretrained_model": pretrained_model,
+        "finetuned_weights": str(finetuned_weights),
+        "mean_recall_pretrained": mean_pretrained,
+        "mean_recall_finetuned": mean_finetuned,
+        "per_image": per_image,
+    }
+    out_json = METRICS_DIR / f"detection_finetune_eval_{distortion}_{tag}.json"
+    out_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+    plot_path = FIGURES_DIR / f"detection_finetune_{distortion}_{tag}.png"
+    save_comparison_bars(
+        ["Pretrained", "Fine-tuned"],
+        [mean_pretrained, mean_finetuned],
+        ylabel="Recall @ IoU 0.5",
+        title=f"Detection on distorted val — {distortion} ({tag})",
+        output_path=plot_path,
+    )
+    print(
+        f"Val recall — pretrained: {mean_pretrained:.3f}  "
+        f"fine-tuned: {mean_finetuned:.3f}"
+    )
+    print(f"Saved: {out_json}")
+    print(f"Saved: {plot_path}")
+    return summary
 
 
 def parse_args() -> argparse.Namespace:
@@ -283,9 +475,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         default="baseline",
-        choices=("baseline", "robustness", "distorted", "enhanced", "finetune", "all"),
+        choices=("baseline", "robustness", "distorted", "enhanced", "finetune", "finetune-eval", "all"),
     )
     parser.add_argument("--distortion", default="noise", choices=("noise", "low_light", "jpeg"))
+    parser.add_argument(
+        "--level",
+        type=float,
+        default=None,
+        help="Distortion intensity for finetune (default: mid level per type)",
+    )
+    parser.add_argument("--num-train", type=int, default=300, help="Training images for YOLO dataset")
+    parser.add_argument("--num-val", type=int, default=50, help="Validation images for YOLO dataset")
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--batch", type=int, default=8)
+    parser.add_argument("--rebuild-dataset", action="store_true")
     return parser.parse_args()
 
 
@@ -302,7 +505,26 @@ def main() -> None:
     elif args.mode == "enhanced":
         run_enhanced(args.split, args.num_images, args.model)
     elif args.mode == "finetune":
-        run_finetune(args.split, args.distortion, args.model)
+        run_finetune(
+            args.split,
+            args.distortion,
+            args.model,
+            level=args.level,
+            num_train=args.num_train,
+            num_val=args.num_val,
+            seed=args.seed,
+            epochs=args.epochs,
+            batch=args.batch,
+            rebuild_dataset=args.rebuild_dataset,
+        )
+    elif args.mode == "finetune-eval":
+        run_finetune_eval(
+            args.split,
+            args.distortion,
+            args.model,
+            level=args.level,
+            seed=args.seed,
+        )
     elif args.mode == "all":
         run_baseline(args.split, args.num_images, args.seed, args.model)
         run_robustness(args.split, args.num_images, args.seed, args.model)

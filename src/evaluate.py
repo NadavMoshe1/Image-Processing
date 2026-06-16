@@ -250,6 +250,83 @@ def save_comparison_bars(
     return output_path
 
 
+def save_per_class_recall_chart(
+    per_class_recall: dict[str, float],
+    *,
+    output_path: Path,
+    title: str = "YOLOv8 per-class recall @ IoU 0.5 (clean baseline)",
+) -> Path:
+    """Horizontal bar chart of detection recall per object class."""
+    ensure_output_dirs()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    items = sorted(per_class_recall.items(), key=lambda kv: kv[1], reverse=True)
+    labels = [k.title() for k, _ in items]
+    values = [v for _, v in items]
+
+    fig, ax = plt.subplots(figsize=(9, max(4, 0.45 * len(labels))))
+    colors = ["#2ecc71" if v >= 0.35 else "#f39c12" if v >= 0.15 else "#e74c3c" for v in values]
+    bars = ax.barh(labels, values, color=colors, edgecolor="white", linewidth=0.6)
+    ax.set_xlim(0, 1.0)
+    ax.set_xlabel("Recall @ IoU 0.5")
+    ax.set_title(title)
+    ax.axvline(np.mean(values), color="#3498db", linestyle="--", linewidth=1.2, label="Mean recall")
+    ax.grid(axis="x", alpha=0.3)
+    for bar, val in zip(bars, values):
+        ax.text(
+            min(val + 0.02, 0.95),
+            bar.get_y() + bar.get_height() / 2,
+            f"{val:.2f}",
+            va="center",
+            fontsize=9,
+        )
+    ax.legend(loc="lower right", fontsize=9)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def save_per_class_miou_chart(
+    per_class_miou: dict[str, float],
+    *,
+    output_path: Path,
+    title: str = "SegFormer per-class IoU (clean baseline)",
+    mean_miou: float | None = None,
+) -> Path:
+    """Horizontal bar chart of segmentation IoU per semantic class."""
+    ensure_output_dirs()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    items = sorted(per_class_miou.items(), key=lambda kv: kv[1], reverse=True)
+    labels = [k.title() for k, _ in items]
+    values = [v for _, v in items]
+    mean_val = mean_miou if mean_miou is not None else float(np.mean(values))
+
+    fig, ax = plt.subplots(figsize=(9, max(4, 0.45 * len(labels))))
+    colors = ["#2ecc71" if v >= 0.55 else "#f39c12" if v >= 0.25 else "#e74c3c" for v in values]
+    bars = ax.barh(labels, values, color=colors, edgecolor="white", linewidth=0.6)
+    ax.set_xlim(0, 1.0)
+    ax.set_xlabel("IoU")
+    ax.set_title(title)
+    ax.axvline(mean_val, color="#3498db", linestyle="--", linewidth=1.2, label=f"Mean mIoU ({mean_val:.2f})")
+    ax.grid(axis="x", alpha=0.3)
+    for bar, val in zip(bars, values):
+        if val > 0:
+            ax.text(
+                min(val + 0.02, 0.95),
+                bar.get_y() + bar.get_height() / 2,
+                f"{val:.2f}",
+                va="center",
+                fontsize=9,
+            )
+    ax.legend(loc="lower right", fontsize=9)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
 def box_iou(box_a: dict, box_b: dict) -> float:
     """IoU between two boxes dicts with x1,y1,x2,y2."""
     x1 = max(box_a["x1"], box_b["x1"])
