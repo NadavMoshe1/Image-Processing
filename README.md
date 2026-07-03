@@ -1,26 +1,34 @@
 # Robustness of Vision Algorithms Under Image Degradations
 
-**Course project — Digital Image Processing / Computer Vision**
-
-## Abstract
-
-We study how common image degradations affect vision pipelines at two levels of abstraction: **low-level feature matching** (ORB keypoints) and **high-level scene understanding** (object detection with YOLOv8, semantic segmentation with SegFormer). Using the BDD100K driving dataset, we simulate three distortion types—Gaussian noise, low-light exposure, and JPEG compression—at multiple intensities. For each condition we measure performance degradation and assess whether **classical pre-processing** (NLM denoising, CLAHE, bilateral deblocking) can recover it. A complementary **fine-tuning** stage trains YOLOv8 on distorted data to test whether model adaptation outperforms blind enhancement.
+**Digital Image Processing — Course Project**  
+**Semester:** [2025–2026]  
+**Authors:** [Your Name(s)]
 
 ---
 
-## 1. Introduction
+## Key Takeaways
 
-Autonomous driving systems rely on visual perception under imperfect imaging conditions: sensor noise, poor lighting, and lossy compression all corrupt the input before it reaches downstream modules. Understanding which algorithms are robust—and whether simple restoration helps—is central to building reliable pipelines.
+**Research question:** When dashcam images degrade (noise, low light, JPEG compression), do classical pre-processing fixes help—or do we need to adapt the model?
+
+- **Setup:** BDD100K driving scenes, three distortion types × four intensity levels, evaluated on ORB feature matching (low-level), YOLOv8 nano object detection, and SegFormer semantic segmentation (high-level).
+- **Strategies compared:** (1) no recovery, (2) distortion-specific classical enhancement, (3) **Fine-Tuning** YOLOv8 on distorted data (detection only).
+- **Main finding (preview):** Classical enhancement helps ORB in some low-light cases but rarely helps—and sometimes hurts—deep models; heavy noise breaks YOLO and SegFormer, pointing to **Fine-Tuning** where blind restoration fails.
+
+---
+
+## Motivation
+
+Autonomous driving systems rely on visual perception under imperfect imaging conditions: sensor noise, poor light, and lossy compression all corrupt the input before it reaches downstream modules. Understanding which algorithms are robust—and whether simple restoration helps—is central to building reliable pipelines.
 
 This project follows a controlled experimental design: start from clean ground-truth imagery, apply parametric distortions, then compare three recovery strategies:
 
 1. **None** — evaluate the off-the-shelf model or feature extractor directly on degraded input  
 2. **Pre-processing enhancement** — apply a distortion-specific classical restoration step  
-3. **Fine-tuning** — adapt a deep model to the distortion domain (detection only)
+3. **Fine-Tuning** — adapt a deep model to the distortion domain (detection only)
 
 ---
 
-## 2. Dataset
+## Data & Setup
 
 We use [BDD100K](https://www.bdd100k.com/) (Berkeley DeepDrive), a large-scale benchmark of dashcam scenes with diverse weather, lighting, and traffic. From the 10k-image release we use:
 
@@ -28,17 +36,19 @@ We use [BDD100K](https://www.bdd100k.com/) (Berkeley DeepDrive), a large-scale b
 - **Object-detection annotations** — axis-aligned bounding boxes with category labels (car, person, truck, traffic light, etc.)  
 - **Semantic-segmentation masks** — per-pixel class labels over 19 Cityscapes-compatible categories (road, sidewalk, building, sky, vehicle, …)
 
-Approximately **3,430 train images** contain both detection boxes and segmentation masks; these form the pool for high-level evaluation. ORB matching uses any train frame and does not require annotations.
+Approximately **3,430 train images** contain both detection boxes and segmentation masks. For **object detection** and **semantic segmentation**, we sample only from this shared pool so both high-level tasks use the **same 100 images** (*seed* = 42) and results are directly comparable. ORB matching uses any train frame and does not require annotations.
 
 ### Experimental sample
 
 | Task | Method | *N* | Annotation requirement |
 |------|--------|-----|------------------------|
 | Feature matching | ORB | 100 | None |
-| Object detection | YOLOv8n | 100 | Bounding boxes + seg mask |
-| Semantic segmentation | SegFormer-b0 | 100 | Seg mask + bounding boxes |
+| Object detection | YOLOv8n (YOLOv8 nano) | 100 | Bounding boxes |
+| Semantic segmentation | SegFormer-b0 | 100 | Segmentation masks |
 
-Images are sampled with a fixed random seed for reproducibility. Each image is evaluated under **three distortion types × four intensity levels** (12 degraded conditions), plus the paired enhancement for each type.
+*Detection needs bounding boxes; segmentation needs pixel masks. We restrict high-level evaluation to images that have both annotation types so detection and segmentation share an identical sample.*
+
+Each image is evaluated under **three distortion types × four intensity levels** (12 degraded conditions), plus the paired enhancement for each type.
 
 ### Data preview
 
@@ -48,7 +58,7 @@ Images are sampled with a fixed random seed for reproducibility. Each image is e
 
 ---
 
-## 3. Degradation Model
+## Distortions & Restorations
 
 All distortions are applied **synthetically** to clean images, producing a controlled (clean, degraded) pair for every frame. Each distortion type is swept over **four intensity levels**; the strongest setting is shown in the enhancement figures below.
 
@@ -56,7 +66,15 @@ All distortions are applied **synthetically** to clean images, producing a contr
 
 *Each row: original scene, strongest distortion, and paired restoration. Noise at SNR 5 dB, low light at γ = 0.2, JPEG at quality 10.*
 
-### 3.1 Gaussian noise
+Each distortion is paired with one **classical, blind** enhancement: the restorer does not know the distortion parameters used at synthesis time. The goal is to approximate what a pre-processing stage could do before feeding images to a vision model.
+
+| Distortion | Enhancement | Core idea |
+|------------|-------------|-----------|
+| Gaussian noise | NLM | Patch self-similarity averaging |
+| Low light | CLAHE | Local contrast lift with noise clip |
+| JPEG | Upscale + bilateral | Soften block edges, preserve boundaries |
+
+### Gaussian noise
 
 Independent Gaussian noise is added to every pixel channel until a target **signal-to-noise ratio (SNR)** is reached:
 
@@ -68,9 +86,9 @@ where \(P_{\mathrm{signal}}\) is the mean squared intensity of the clean image a
 
 **Visual effect:** fine grain across the image; edges and textures become harder to distinguish. At SNR 5 dB the scene is visibly speckled, mimicking high-ISO sensor noise or poor wireless transmission.
 
-**Paired restoration:** Non-Local Means (NLM) denoising — see §4.1.
+**Paired restoration:** Non-Local Means (NLM) denoising — see below.
 
-### 3.2 Low light (gamma correction)
+### Low light (gamma correction)
 
 Brightness is reduced with a power-law **gamma** mapping on normalized intensities:
 
@@ -82,9 +100,9 @@ I_{\mathrm{out}} = 255 \cdot \left(\frac{I_{\mathrm{in}}}{255}\right)^{1/\gamma}
 
 **Visual effect:** global under-exposure; shadow regions lose discriminability and color saturation drops. At γ = 0.2 most detail sits in the bottom of the dynamic range, as in night driving or a severely under-exposed dashcam frame.
 
-**Paired restoration:** CLAHE on the luminance channel — see §4.2.
+**Paired restoration:** CLAHE on the luminance channel — see below.
 
-### 3.3 JPEG compression
+### JPEG compression
 
 Images are lossy-compressed with the standard JPEG pipeline at quality factor *Q* ∈ [1, 100], then decoded back to RGB.
 
@@ -92,7 +110,7 @@ Images are lossy-compressed with the standard JPEG pipeline at quality factor *Q
 
 **Visual effect:** **blocking** along 8×8 DCT block boundaries, **ringing** (Gibbs artifacts) near sharp edges, and loss of fine texture inside blocks. At *Q* = 10 the grid pattern is clearly visible on roads and sky — typical of aggressive bandwidth limits in telematics or cloud upload.
 
-**Paired restoration:** upscale + bilateral filter — see §4.3.
+**Paired restoration:** upscale + bilateral filter — see below.
 
 ### Intensity sweep
 
@@ -100,15 +118,11 @@ The same scene at all four levels per distortion (left column = clean reference)
 
 ![Distortion intensity sweep — clean plus four levels per type](outputs/figures/distortion_intensity_train.png)
 
----
-
-## 4. Restoration Methods
-
-Each distortion is paired with one **classical, blind** enhancement: the restorer does not know the distortion parameters used at synthesis time. The goal is to approximate what a pre-processing stage could do before feeding images to a vision model.
+### Restoration details
 
 ![Distorted (strongest) vs enhanced — side-by-side per distortion type](outputs/figures/enhancement_preview_train.png)
 
-### 4.1 Non-Local Means (NLM) — for noise
+**Non-Local Means (NLM) — for noise**
 
 NLM replaces each pixel by a weighted average of pixels in a search window whose **patches** look similar — not just pixels that are spatially close. Similar structures across the image reinforce each other while random noise averages out.
 
@@ -116,7 +130,7 @@ NLM replaces each pixel by a weighted average of pixels in a search window whose
 
 **Trade-off:** smoothing can blur fine detail and shift local contrast, which hurts **ORB binary descriptors** that rely on exact intensity comparisons.
 
-### 4.2 CLAHE — for low light
+**CLAHE — for low light**
 
 **Contrast Limited Adaptive Histogram Equalization** operates on small tiles independently. Each tile's histogram is equalized to spread intensity across the dynamic range, but a **clip limit** caps how much any histogram bin can grow — preventing noise from being amplified into salt-and-pepper artifacts.
 
@@ -126,7 +140,7 @@ We apply CLAHE to the **L channel in LAB color space**, leaving chrominance (a, 
 
 **Trade-off:** can over-boost noise in very dark patches; mild γ (0.75) may look worse after CLAHE because the image was not severely dark to begin with.
 
-### 4.3 Upscale + bilateral filter — for JPEG
+**Upscale + bilateral filter — for JPEG**
 
 A three-step **deblocking** heuristic:
 
@@ -138,39 +152,33 @@ A three-step **deblocking** heuristic:
 
 **Trade-off:** cannot recover frequency content truly discarded by compression; edges may soften slightly.
 
-| Distortion | Enhancement | Core idea |
-|------------|-------------|-----------|
-| Gaussian noise | NLM | Patch self-similarity averaging |
-| Low light | CLAHE | Local contrast lift with noise clip |
-| JPEG | Upscale + bilateral | Soften block edges, preserve boundaries |
-
 ---
 
-## 5. Vision Tasks and Models
+## What We Measured
 
-### 5.1 ORB feature matching (low-level)
+### Vision tasks and models
+
+**ORB feature matching (low-level)**
 
 **ORB** (Oriented FAST and Rotated BRIEF) detects up to 500 corner-like keypoints per image and assigns a 256-bit binary descriptor to each. We treat the **clean image as reference** and the distorted or enhanced image as **query**. Descriptors are matched with brute-force Hamming distance; matches are accepted only if they pass **Lowe's ratio test** (best distance &lt; 0.75 × second-best distance).
 
-This probes whether local appearance—corners, edges, texture—is preserved across degradation, which underpins SLAM, tracking, and correspondence-based methods.
+This probes whether local appearance—corners, edges, texture—is preserved across degradation, which underpins SLAM, tracking, and correspondence-based methods. There is **no external ground truth** for ORB; we measure **descriptor correspondence against the clean reference frame**, not detection-style accuracy against labeled objects.
 
-### 5.2 Object detection (high-level)
+**Object detection (high-level)**
 
-**YOLOv8n** (nano variant, COCO-pretrained) predicts axis-aligned boxes for traffic object classes. Predictions are matched to BDD100K ground-truth boxes by category and spatial overlap. We report performance on degraded and enhanced inputs using the same frozen weights.
+**YOLOv8n** (YOLOv8 nano, COCO-pretrained) predicts axis-aligned boxes for traffic object classes. Predictions are matched to BDD100K ground-truth boxes by category and spatial overlap. We report performance on degraded and enhanced inputs using the same frozen weights.
 
-### 5.3 Semantic segmentation (high-level)
+**Semantic segmentation (high-level)**
 
 **SegFormer-b0** (Cityscapes-finetuned) assigns one of 19 semantic classes to each pixel. Predictions are compared to BDD100K index masks. Class definitions align with Cityscapes trainIds, enabling direct use of a pretrained model.
 
-### 5.4 Fine-tuning (detection)
+**Fine-Tuning (detection)**
 
-As a fourth recovery strategy, YOLOv8 is fine-tuned on a larger set of **distorted** train images (with clean labels) and evaluated on held-out distorted validation frames. This tests **domain adaptation** against blind pre-processing.
+As a fourth recovery strategy, YOLOv8n is **Fine-Tuned** on a larger set of **distorted** train images (with clean labels) and evaluated on held-out distorted validation frames. This tests **domain adaptation** against blind pre-processing.
 
----
+### Evaluation metrics
 
-## 6. Evaluation Metrics
-
-### 6.1 ORB matching ratio
+**ORB matching ratio**
 
 \[
 \text{matching ratio} = \frac{\#\ \text{good descriptor matches}}{\#\ \text{keypoints on clean image}}
@@ -178,7 +186,9 @@ As a fourth recovery strategy, YOLOv8 is fine-tuned on a larger set of **distort
 
 A ratio of 1.0 means every reference keypoint found a unique, confident match on the query. **Recovery** = matching ratio<sub>enhanced</sub> − matching ratio<sub>distorted</sub>.
 
-### 6.2 Detection — recall @ IoU 0.5
+This is **not** classification accuracy: it counts how well keypoints on the clean image match descriptors on the degraded or enhanced query, with no labeled object ground truth.
+
+**Detection — recall @ IoU 0.5**
 
 For each ground-truth box, we find the highest-IoU prediction of the **same class**. A match is counted if **IoU ≥ 0.5**, where:
 
@@ -188,28 +198,26 @@ For each ground-truth box, we find the highest-IoU prediction of the **same clas
 
 **Recall** = matched ground-truth boxes / total ground-truth boxes. We also report **precision** (matched predictions / total predictions) and **mean matched IoU** among accepted pairs.
 
-### 6.3 Segmentation — mean IoU (mIoU)
+**Segmentation — mean IoU (mIoU)**
 
 For each semantic class *c*, pixel-level IoU is computed between prediction and ground truth. **mIoU** is the mean over classes present in the image. Pixels labeled *ignore* (trainId 255) are excluded.
 
----
-
-## 7. Experimental Protocol
+### Experimental protocol
 
 For every task and distortion type:
 
 1. **Baseline** — evaluate on clean images (upper bound)  
 2. **Distorted** — evaluate on synthetically degraded images  
 3. **Enhanced** — evaluate on degraded images after the paired restoration step  
-4. **Fine-tuned** *(detection only)* — evaluate a model trained on distorted data  
+4. **Fine-Tuned** *(detection only)* — evaluate a model trained on distorted data  
 
 Metrics are averaged over the evaluation set and plotted as a function of distortion intensity. Results are reported per class where applicable.
 
 ---
 
-## 8. Results
+## Results
 
-### 8.1 ORB matching (*N* = 100)
+### ORB matching ratio (*N* = 100)
 
 | Distortion | Level | Distorted | Enhanced | Recovery |
 |------------|-------|-----------|----------|----------|
@@ -226,7 +234,7 @@ Metrics are averaged over the evaluation set and plotted as a function of distor
 | JPEG | *Q* = 20 | 0.816 | 0.805 | −0.011 |
 | JPEG | *Q* = 10 | 0.691 | 0.694 | +0.002 |
 
-*Clean baseline matching ratio: **1.000***
+*Clean baseline matching ratio: **1.000** — by definition, not a measure of “real-world” performance. ORB compares each image to the clean reference; when query and reference are the same clean frame, every keypoint matches itself, so the ratio is 1.0. This differs from YOLO and SegFormer baselines, which are scored against human-annotated ground truth.*
 
 ![ORB matching ratio vs distortion intensity](outputs/figures/orb_matching_train.png)
 
@@ -236,7 +244,7 @@ Metrics are averaged over the evaluation set and plotted as a function of distor
 
 *Green circles = detected keypoints (size = scale, radial line = orientation). Enhancement can change keypoint locations and counts.*
 
-### 8.2 Object detection (*N* = 100)
+### Object detection (*N* = 100)
 
 **Clean baseline**
 
@@ -254,9 +262,9 @@ Metrics are averaged over the evaluation set and plotted as a function of distor
 
 ![Detection recall under distortion and enhancement](outputs/figures/detection_robustness_train.png)
 
-**Findings.** Heavy noise (SNR 5 dB) causes the largest recall drop. Pre-processing provides **limited recovery** for detection; YOLO's frozen representations are relatively insensitive to mild JPEG and low-light shifts but collapse under strong noise. Fine-tuning on distorted data is intended to address this gap.
+**Findings.** Heavy noise (SNR 5 dB) causes the largest recall drop. Pre-processing provides **limited recovery** for detection; YOLOv8n's frozen representations are relatively insensitive to mild JPEG and low-light shifts but collapse under strong noise. **Fine-Tuning** on distorted data is intended to address this gap.
 
-### 8.3 Semantic segmentation (*N* = 100)
+### Semantic segmentation (*N* = 100)
 
 **Clean baseline — mIoU = 0.469**
 
@@ -287,14 +295,14 @@ Metrics are averaged over the evaluation set and plotted as a function of distor
 
 ---
 
-## 9. Discussion
+## Conclusions
 
-A consistent theme across tasks is that **low-level and high-level robustness diverge**, and **blind enhancement is not universally beneficial**. CLAHE restores ORB correspondences in dark scenes but does not improve YOLO recall or SegFormer mIoU. NLM denoising degrades ORB matching and **actively hurts segmentation at mild noise levels** by smoothing pixel boundaries that define class regions. Deep models pretrained on clean natural images tolerate mild JPEG and exposure shifts but fail abruptly under heavy noise (YOLO recall and SegFormer mIoU both collapse at SNR 5 dB)—suggesting that **domain adaptation (fine-tuning)** may be necessary where classical restoration is insufficient or harmful.
+A consistent theme across tasks is that **low-level and high-level robustness diverge**, and **blind enhancement is not universally beneficial**. CLAHE restores ORB correspondences in dark scenes but does not improve YOLOv8n recall or SegFormer mIoU. NLM denoising degrades ORB matching and **actively hurts segmentation at mild noise levels** by smoothing pixel boundaries that define class regions. Deep models pretrained on clean natural images tolerate mild JPEG and exposure shifts but fail abruptly under heavy noise (YOLOv8n recall and SegFormer mIoU both collapse at SNR 5 dB)—suggesting that **Fine-Tuning (domain adaptation)** may be necessary where classical restoration is insufficient or harmful.
 
 All three tasks were evaluated on **100 train images** (*seed* = 42) for comparable sample sizes.
 
 ---
 
-## 10. Reproducibility
+## Reproducibility
 
 Source code implements the pipeline described above (distortion synthesis, enhancement, evaluation, and plotting). Dependencies are listed in `requirements.txt`. Raw BDD100K data must be obtained separately from the [official website](https://www.bdd100k.com/); it is not redistributed with this repository.
