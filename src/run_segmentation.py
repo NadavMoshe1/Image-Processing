@@ -25,10 +25,15 @@ from src.distortions import apply_distortion, default_levels, level_tag
 from src.enhancements import enhance_for_distortion, enhancement_label
 from src.evaluate import (
     compute_miou,
+    load_segmentation_clean_baseline_miou,
+    load_segmentation_finetune_batch_results,
     save_comparison_bars,
     save_per_class_miou_chart,
     save_robustness_summary_plot,
     save_segformer_training_curves,
+    save_segmentation_finetune_summary_gain_plot,
+    save_segmentation_finetune_summary_recall_plot,
+    save_segmentation_finetune_summary_table_plot,
 )
 from src.paths import (
     BASELINE_SEGMENTATION_DIR,
@@ -767,6 +772,192 @@ def run_finetune_eval(
     return summary
 
 
+def _distortion_display_name(distortion: str) -> str:
+    return {
+        "noise": "Noise",
+        "low_light": "Low Light",
+        "jpeg": "JPEG",
+    }.get(distortion, distortion.replace("_", " ").title())
+
+
+def _finetune_condition_label(distortion: str, level: float | int) -> str:
+    if distortion == "noise":
+        return f"Noise (SNR {level:g} dB)"
+    if distortion == "low_light":
+        return f"Low light (γ={level:g})"
+    if distortion == "jpeg":
+        return f"JPEG (Q={int(level)})"
+    return f"{distortion} ({level})"
+
+
+def _best_seg_finetune_preview_stem(distortion: str, level: float | int) -> str | None:
+    tag = level_tag(distortion, level)
+    eval_json = METRICS_DIR / f"segmentation_finetune_eval_{distortion}_{tag}.json"
+    if eval_json.exists():
+        eval_data = json.loads(eval_json.read_text(encoding="utf-8"))
+        ranked = sorted(
+            eval_data.get("per_image", []),
+            key=lambda row: row["finetuned_miou"] - row["pretrained_miou"],
+            reverse=True,
+        )
+        if ranked:
+            return ranked[0]["image"].replace(".jpg", "")
+
+    manifest = load_manifest(distortion, level)
+    val_stems = manifest.get("val", [])
+    return val_stems[0] if val_stems else None
+
+
+def save_finetune_summary_preview(
+    *,
+    model_id: str = "nvidia/segformer-b0-finetuned-cityscapes-512-1024",
+    examples: list[tuple[str, float | int]] | None = None,
+) -> Path:
+    """Qualitative SegFormer fine-tuning examples — one row per distortion type."""
+    ensure_output_dirs()
+    if examples is None:
+        examples = [(distortion, default_finetune_level(distortion)) for distortion in DISTORTION_TYPES]
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    pretrained_model, pretrained_processor = _load_segformer_model(model_id, device)
+    rows: list[dict] = []
+
+    for distortion, level in examples:
+        if distortion == "jpeg":
+            level = int(level)
+        tag = level_tag(distortion, level)
+        root = dataset_root(distortion, level)
+        finetuned_dir = FINETUNE_DIR / _segformer_run_name(distortion, level)
+        stem = _best_seg_finetune_preview_stem(distortion, level)
+        if stem is None or not finetuned_dir.exists():
+            continue
+
+        img_path = root / "images" / "val" / f"{stem}.jpg"
+        image = cv2.imread(str(img_path))
+        gt_mask = load_seg_mask_from_dataset(root, "val", stem)
+        if image is None or gt_mask is None:
+            continue
+
+        finetuned_model, finetuned_processor = _load_segformer_model(str(finetuned_dir), device)
+        pred_pre = predict_segmentation(pretrained_model, pretrained_processor, image, device)
+        pred_ft = predict_segmentation(finetuned_model, finetuned_processor, image, device)
+        m_pre = compute_miou(pred_pre, gt_mask)["miou"]
+        m_ft = compute_miou(pred_ft, gt_mask)["miou"]
+
+        gt_color = mask_to_color(gt_mask)
+        rows.append(
+            {
+                "distortion_label": _distortion_display_name(distortion),
+                "label": _finetune_condition_label(distortion, level),
+                "stem": stem,
+                "panels": [
+                    cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
+                    cv2.cvtColor(overlay_seg_mask(image, gt_color), cv2.COLOR_BGR2RGB),
+                    cv2.cvtColor(overlay_seg_mask(image, mask_to_color(pred_pre)), cv2.COLOR_BGR2RGB),
+                    cv2.cvtColor(overlay_seg_mask(image, mask_to_color(pred_ft)), cv2.COLOR_BGR2RGB),
+                ],
+                "miou_pre": m_pre,
+                "miou_ft": m_ft,
+            }
+        )
+
+    if not rows:
+        raise SystemExit("No fine-tuned SegFormer models / val images found for summary preview.")
+
+    n = len(rows)
+    fig, axes = plt.subplots(n, 4, figsize=(16, 4.2 * n))
+    if n == 1:
+        axes = np.expand_dims(axes, axis=0)
+
+    col_titles = ["Distorted input", "Ground truth", "Pretrained", "Fine-tuned"]
+    for row_idx, row in enumerate(rows):
+        for col, panel in enumerate(row["panels"]):
+            axes[row_idx, col].imshow(panel)
+            axes[row_idx, col].axis("off")
+            if row_idx == 0:
+                axes[row_idx, col].set_title(col_titles[col], fontsize=11)
+            if col == 0:
+                axes[row_idx, col].text(
+                    0.02,
+                    0.98,
+                    row["distortion_label"],
+                    transform=axes[row_idx, col].transAxes,
+                    fontsize=13,
+                    fontweight="bold",
+                    va="top",
+                    ha="left",
+                    color="white",
+                    bbox={"boxstyle": "round,pad=0.35", "facecolor": "black", "alpha": 0.7},
+                )
+                axes[row_idx, col].text(
+                    0.02,
+                    0.88,
+                    row["label"],
+                    transform=axes[row_idx, col].transAxes,
+                    fontsize=9,
+                    va="top",
+                    ha="left",
+                    color="white",
+                    bbox={"boxstyle": "round,pad=0.25", "facecolor": "#333333", "alpha": 0.65},
+                )
+                axes[row_idx, col].set_ylabel(
+                    f"{row['stem']}\nmIoU: {row['miou_pre']:.2f} → {row['miou_ft']:.2f}",
+                    rotation=90,
+                    labelpad=48,
+                    fontsize=8,
+                )
+
+    fig.suptitle(
+        "SegFormer fine-tuning — qualitative examples (largest mIoU gain per type)",
+        fontsize=13,
+    )
+    fig.tight_layout()
+    out = FIGURES_DIR / "segmentation_finetune_summary_preview.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved summary preview: {out}")
+    return out
+
+
+def run_finetune_summary(summary_path: Path | None = None) -> dict:
+    """Generate summary figures from SegFormer fine-tune batch results."""
+    ensure_output_dirs()
+    grouped, batch = load_segmentation_finetune_batch_results(summary_path)
+
+    if not any(grouped.values()):
+        raise SystemExit("No SegFormer fine-tune batch results found.")
+
+    subtitle = (
+        f"{batch.get('num_train', 500)} train / {batch.get('num_val', 100)} val · "
+        f"{batch.get('epochs', '?')} epochs"
+    )
+    baseline_miou = load_segmentation_clean_baseline_miou("train")
+    recall_path = FIGURES_DIR / "segmentation_finetune_summary_recall.png"
+    gain_path = FIGURES_DIR / "segmentation_finetune_summary_gain.png"
+    table_path = FIGURES_DIR / "segmentation_finetune_summary_table.png"
+
+    save_segmentation_finetune_summary_recall_plot(
+        grouped,
+        recall_path,
+        subtitle=subtitle,
+        baseline_miou=baseline_miou,
+    )
+    save_segmentation_finetune_summary_gain_plot(grouped, gain_path)
+    save_segmentation_finetune_summary_table_plot(
+        grouped, table_path, baseline_miou=baseline_miou
+    )
+
+    try:
+        save_finetune_summary_preview()
+    except SystemExit as exc:
+        print(exc)
+
+    print(f"Saved summary mIoU plot: {recall_path}")
+    print(f"Saved summary gain plot: {gain_path}")
+    print(f"Saved summary table plot: {table_path}")
+    return {"grouped": grouped, "batch": batch}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SegFormer semantic segmentation evaluation.")
     parser.add_argument("--split", default="train", choices=("train", "val"))
@@ -779,7 +970,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         default="baseline",
-        choices=("baseline", "robustness", "distorted", "enhanced", "build-dataset", "finetune", "finetune-eval", "finetune-plots", "all"),
+        choices=("baseline", "robustness", "distorted", "enhanced", "build-dataset", "finetune", "finetune-eval", "finetune-plots", "finetune-summary", "all"),
     )
     parser.add_argument("--distortion", default="noise", choices=("noise", "low_light", "jpeg"))
     parser.add_argument(
@@ -843,6 +1034,8 @@ def main() -> None:
         )
     elif args.mode == "finetune-plots":
         run_finetune_plots(args.distortion, args.level, model_id=args.model)
+    elif args.mode == "finetune-summary":
+        run_finetune_summary()
     elif args.mode == "all":
         run_baseline(args.split, args.num_images, args.seed, args.model)
         run_robustness(args.split, args.num_images, args.seed, args.model)

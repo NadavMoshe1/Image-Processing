@@ -179,6 +179,14 @@ def main() -> None:
     _log(f"Progress log: {PROGRESS_PATH}")
     _log(f"Text log: {LOG_PATH}")
 
+    try:
+        from src.run_segmentation import run_finetune_summary
+
+        _log("Generating batch summary figures...")
+        run_finetune_summary(summary_path)
+    except Exception as exc:
+        _log(f"Summary plot generation failed: {exc}")
+
 
 if __name__ == "__main__":
     main()

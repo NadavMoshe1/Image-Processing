@@ -363,7 +363,11 @@ Recall @ IoU 0.5 on distorted val images - pretrained vs enhanced vs Fine-Tuned:
 | JPEG | *Q* = 20 | 0.294 | 0.297 | **0.453** |
 | JPEG | *Q* = 10 | 0.243 | 0.255 | **0.417** |
 
-![Fine-Tuning summary - recall across all distortion levels](outputs/figures/detection_finetune_summary_recall.png)
+![Fine-Tuning summary - recall across noise, low light, and JPEG](outputs/figures/detection_finetune_summary_recall.png)
+
+*Three panels: **Gaussian noise** (NLM), **low light** (CLAHE), and **JPEG** (bilateral). Fine-Tuned recall (green) exceeds pretrained and enhancement at every level.*
+
+![Fine-Tuning recall gain over pretrained — all 12 conditions](outputs/figures/detection_finetune_summary_gain.png)
 
 ![Fine-Tuning qualitative comparison - pretrained vs Fine-Tuned YOLO on distorted val images (one example per distortion type)](outputs/figures/detection_finetune_summary_preview.png)
 
@@ -392,13 +396,17 @@ mIoU on distorted val images - pretrained vs CLAHE/NLM/bilateral vs Fine-Tuned (
 
 *Enhanced column uses NLM (noise), CLAHE (low light), or bilateral deblocking (JPEG), matching the frozen-model robustness protocol.*
 
-![Fine-Tuning example - SegFormer mIoU on noisy val (SNR 10 dB)](outputs/figures/segmentation_finetune_noise_snr_10db.png)
+![Fine-Tuning summary - mIoU across noise, low light, and JPEG](outputs/figures/segmentation_finetune_summary_recall.png)
 
-![Fine-Tuning qualitative comparison - SegFormer on low-light val (γ = 0.35)](outputs/figures/segmentation_finetune_preview_low_light_gamma_0.35.png)
+*Three panels: **Gaussian noise** (NLM), **low light** (CLAHE), and **JPEG** (bilateral). Dotted line = clean baseline mIoU (0.47). Fine-Tuned mIoU (green) exceeds pretrained and enhancement at every level.*
 
-*Per-level bar charts and preview grids for all 12 conditions are under `outputs/figures/segmentation_finetune_*.png`.*
+![Fine-Tuning mIoU gain over pretrained — all 12 conditions](outputs/figures/segmentation_finetune_summary_gain.png)
 
-**Findings (Fine-Tuning).** Fine-Tuning beats frozen pretrained and classical enhancement at **all 12 levels**. NLM **hurts** mild-noise segmentation even more after adaptation (e.g. SNR 30 dB: pretrained 0.45 vs enhanced 0.36). The largest relative gains are under heavy noise (SNR 5 dB: +0.21 mIoU over pretrained) and strong low light (γ = 0.2: +0.09 mIoU). Hardest absolute FT score: **0.428** mIoU at γ = 0.2; best: **0.523** at JPEG *Q* = 90.
+![Fine-Tuning qualitative comparison - SegFormer on distorted val (one example per distortion type)](outputs/figures/segmentation_finetune_summary_preview.png)
+
+*Summary preview: one val frame per distortion type (Noise / Low Light / JPEG) at mid severity, showing largest mIoU gain. Per-level bar charts: `outputs/figures/segmentation_finetune_*.png`.*
+
+**Findings (Fine-Tuning).** Fine-Tuning beats frozen pretrained and classical enhancement at **all 12 levels** across **noise, low light, and JPEG**. NLM **hurts** mild-noise segmentation (SNR 30 dB: pretrained 0.45 vs NLM 0.36); CLAHE and bilateral provide little gain over distorted input. The largest relative gains are under heavy noise (SNR 5 dB: +0.21 mIoU) and strong low light (γ = 0.2: +0.09 mIoU). Hardest absolute FT score: **0.428** mIoU at γ = 0.2; best: **0.523** at JPEG *Q* = 90.
 
 ---
 

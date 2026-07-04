@@ -289,6 +289,9 @@ def save_detection_finetune_summary_recall_plot(
     title: str = "YOLO fine-tuning — recall vs distortion intensity",
     subtitle: str | None = None,
     baseline_recall: float | None = None,
+    ylabel: str = "Recall @ IoU 0.5",
+    baseline_label: str | None = None,
+    ylim_max: float = 0.55,
 ) -> Path:
     """Line plot of pretrained / enhanced / fine-tuned recall across all FT levels."""
     ensure_output_dirs()
@@ -337,22 +340,23 @@ def save_detection_finetune_summary_recall_plot(
             )
 
         ax.set_xlabel(xlabels[distortion])
-        ax.set_ylabel("Recall @ IoU 0.5")
+        ax.set_ylabel(ylabel)
         ax.set_title(distortion.replace("_", " ").title())
         y_max = max(
             (row[key] for row in rows for key in ("pretrained", "enhanced", "finetuned")),
             default=0.0,
         )
         if baseline_recall is not None:
+            bl_label = baseline_label or f"Clean baseline ({baseline_recall:.2f})"
             ax.axhline(
                 baseline_recall,
                 color="#3498db",
                 linestyle=":",
                 linewidth=2,
-                label=f"Clean baseline ({baseline_recall:.2f})",
+                label=bl_label,
             )
             y_max = max(y_max, baseline_recall)
-        ax.set_ylim(0, max(0.55, y_max * 1.12))
+        ax.set_ylim(0, max(ylim_max, y_max * 1.12))
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=8, loc="lower left")
 
@@ -371,6 +375,7 @@ def save_detection_finetune_summary_gain_plot(
     output_path: Path,
     *,
     title: str = "YOLO fine-tuning — recall gain over pretrained",
+    ylabel: str = "Recall gain (fine-tuned − pretrained)",
 ) -> Path:
     """Bar chart of fine-tuned minus pretrained recall for every distortion level."""
     ensure_output_dirs()
@@ -391,7 +396,7 @@ def save_detection_finetune_summary_gain_plot(
     fig, ax = plt.subplots(figsize=(max(10, 0.55 * len(labels)), 5))
     bars = ax.bar(labels, gains, color=colors, edgecolor="white", linewidth=0.8)
     ax.axhline(0, color="#333333", linewidth=0.8)
-    ax.set_ylabel("Recall gain (fine-tuned − pretrained)")
+    ax.set_ylabel(ylabel)
     ax.set_title(title)
     ax.tick_params(axis="x", rotation=35, labelsize=8)
     ax.grid(axis="y", alpha=0.3)
@@ -418,6 +423,8 @@ def save_detection_finetune_summary_table_plot(
     *,
     title: str = "YOLO fine-tuning — recall by condition",
     baseline_recall: float | None = None,
+    cbar_label: str = "Recall @ IoU 0.5",
+    vmax: float = 0.5,
 ) -> Path:
     """Heatmap-style table of pretrained / enhanced / fine-tuned recall."""
     ensure_output_dirs()
@@ -448,7 +455,7 @@ def save_detection_finetune_summary_table_plot(
         values = np.hstack([baseline_col, values])
 
     fig, ax = plt.subplots(figsize=(8, max(4, 0.35 * len(labels))))
-    im = ax.imshow(values, aspect="auto", cmap="YlGn", vmin=0, vmax=0.5)
+    im = ax.imshow(values, aspect="auto", cmap="YlGn", vmin=0, vmax=vmax)
     ax.set_xticks(range(len(col_names)))
     ax.set_xticklabels(col_names)
     ax.set_yticks(range(len(labels)))
@@ -460,11 +467,123 @@ def save_detection_finetune_summary_table_plot(
             ax.text(j, i, f"{values[i, j]:.3f}", ha="center", va="center", fontsize=8, color="#222222")
 
     cbar = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02)
-    cbar.set_label("Recall @ IoU 0.5")
+    cbar.set_label(cbar_label)
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return output_path
+
+
+def load_segmentation_finetune_batch_results(
+    summary_path: Path | None = None,
+) -> tuple[dict[str, list[dict]], dict]:
+    """Load SegFormer fine-tune batch summary; fill gaps from per-job eval JSON files."""
+    from src.distortions import default_levels, level_tag
+
+    if summary_path is None:
+        summary_path = METRICS_DIR / "seg_finetune_batch_summary.json"
+
+    batch: dict = {}
+    by_job: dict[str, dict] = {}
+    if summary_path.exists():
+        batch = json.loads(summary_path.read_text(encoding="utf-8"))
+        for row in batch.get("results", []):
+            if not row.get("skipped") and "mean_miou_pretrained" in row:
+                by_job[row["job"]] = row
+
+    grouped: dict[str, list[dict]] = {distortion: [] for distortion in DISTORTION_TYPES}
+    for distortion in DISTORTION_TYPES:
+        for level in default_levels(distortion):
+            tag = level_tag(distortion, level)
+            job_name = f"{distortion}/{tag}"
+            row = by_job.get(job_name)
+            if row is None:
+                eval_path = METRICS_DIR / f"segmentation_finetune_eval_{distortion}_{tag}.json"
+                if eval_path.exists():
+                    eval_data = json.loads(eval_path.read_text(encoding="utf-8"))
+                    row = {
+                        "mean_miou_pretrained": eval_data["mean_miou_pretrained"],
+                        "mean_miou_enhanced": eval_data["mean_miou_enhanced"],
+                        "mean_miou_finetuned": eval_data["mean_miou_finetuned"],
+                    }
+            if row is None:
+                continue
+            grouped[distortion].append(
+                {
+                    "level": float(level) if distortion != "jpeg" else int(level),
+                    "tag": tag,
+                    "job": job_name,
+                    "pretrained": float(row["mean_miou_pretrained"]),
+                    "enhanced": float(row["mean_miou_enhanced"]),
+                    "finetuned": float(row["mean_miou_finetuned"]),
+                }
+            )
+        grouped[distortion].sort(
+            key=lambda item: item["level"],
+            reverse=(distortion != "low_light"),
+        )
+
+    if not batch:
+        batch = {"num_train": 500, "num_val": 100, "epochs": 30}
+    return grouped, batch
+
+
+def load_segmentation_clean_baseline_miou(split: str = "train") -> float | None:
+    """Mean mIoU on clean images from the robustness evaluation set."""
+    path = METRICS_DIR / f"segmentation_baseline_{split}.json"
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    miou = data.get("mean_miou")
+    return float(miou) if miou is not None else None
+
+
+def save_segmentation_finetune_summary_recall_plot(
+    grouped: dict[str, list[dict]],
+    output_path: Path,
+    *,
+    subtitle: str | None = None,
+    baseline_miou: float | None = None,
+) -> Path:
+    baseline_label = f"Clean baseline ({baseline_miou:.2f})" if baseline_miou is not None else None
+    return save_detection_finetune_summary_recall_plot(
+        grouped,
+        output_path,
+        title="SegFormer fine-tuning — mIoU vs distortion intensity",
+        subtitle=subtitle,
+        baseline_recall=baseline_miou,
+        ylabel="mIoU",
+        baseline_label=baseline_label,
+        ylim_max=0.58,
+    )
+
+
+def save_segmentation_finetune_summary_gain_plot(
+    grouped: dict[str, list[dict]],
+    output_path: Path,
+) -> Path:
+    return save_detection_finetune_summary_gain_plot(
+        grouped,
+        output_path,
+        title="SegFormer fine-tuning — mIoU gain over pretrained",
+        ylabel="mIoU gain (fine-tuned − pretrained)",
+    )
+
+
+def save_segmentation_finetune_summary_table_plot(
+    grouped: dict[str, list[dict]],
+    output_path: Path,
+    *,
+    baseline_miou: float | None = None,
+) -> Path:
+    return save_detection_finetune_summary_table_plot(
+        grouped,
+        output_path,
+        title="SegFormer fine-tuning — mIoU by condition",
+        baseline_recall=baseline_miou,
+        cbar_label="mIoU",
+        vmax=0.55,
+    )
 
 
 def save_comparison_bars(
