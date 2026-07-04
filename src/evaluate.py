@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.paths import DISTORTION_TYPES, ensure_output_dirs
+from src.paths import DISTORTION_TYPES, METRICS_DIR, ensure_output_dirs
+from src.enhancements import enhancement_label
 
 
 def orb_matching_ratio(
@@ -227,6 +229,244 @@ def save_orb_summary_plot(
     )
 
 
+def load_detection_finetune_batch_results(
+    summary_path: Path | None = None,
+) -> tuple[dict[str, list[dict]], dict]:
+    """Load YOLO fine-tune batch summary and group metrics by distortion type."""
+    from src.distortions import default_levels, level_tag
+
+    if summary_path is None:
+        summary_path = METRICS_DIR / "finetune_batch_summary.json"
+    if not summary_path.exists():
+        raise FileNotFoundError(f"Batch summary not found: {summary_path}")
+
+    batch = json.loads(summary_path.read_text(encoding="utf-8"))
+    by_job = {
+        row["job"]: row
+        for row in batch.get("results", [])
+        if not row.get("skipped") and "mean_recall_pretrained" in row
+    }
+
+    grouped: dict[str, list[dict]] = {distortion: [] for distortion in DISTORTION_TYPES}
+    for distortion in DISTORTION_TYPES:
+        for level in default_levels(distortion):
+            tag = level_tag(distortion, level)
+            job_name = f"{distortion}/{tag}"
+            row = by_job.get(job_name)
+            if row is None:
+                continue
+            grouped[distortion].append(
+                {
+                    "level": float(level) if distortion != "jpeg" else int(level),
+                    "tag": tag,
+                    "job": job_name,
+                    "pretrained": float(row["mean_recall_pretrained"]),
+                    "enhanced": float(row["mean_recall_enhanced"]),
+                    "finetuned": float(row["mean_recall_finetuned"]),
+                }
+            )
+        grouped[distortion].sort(
+            key=lambda item: item["level"],
+            reverse=(distortion != "low_light"),
+        )
+    return grouped, batch
+
+
+def load_detection_clean_baseline_recall(split: str = "train") -> float | None:
+    """Mean recall @ IoU 0.5 on clean images from the robustness evaluation set."""
+    path = METRICS_DIR / f"detection_baseline_{split}.json"
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    recall = data.get("mean_recall")
+    return float(recall) if recall is not None else None
+
+
+def save_detection_finetune_summary_recall_plot(
+    grouped: dict[str, list[dict]],
+    output_path: Path,
+    *,
+    title: str = "YOLO fine-tuning — recall vs distortion intensity",
+    subtitle: str | None = None,
+    baseline_recall: float | None = None,
+) -> Path:
+    """Line plot of pretrained / enhanced / fine-tuned recall across all FT levels."""
+    ensure_output_dirs()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    xlabels = {
+        "noise": "SNR (dB)",
+        "low_light": "Gamma",
+        "jpeg": "JPEG quality",
+    }
+    series_style = {
+        "pretrained": {"marker": "o", "linestyle": "-", "color": "#95a5a6", "label": "Pretrained"},
+        "finetuned": {"marker": "^", "linestyle": "-", "color": "#2ecc71", "label": "Fine-tuned"},
+    }
+
+    fig, axes = plt.subplots(1, len(DISTORTION_TYPES), figsize=(5 * len(DISTORTION_TYPES), 4.8))
+    if len(DISTORTION_TYPES) == 1:
+        axes = [axes]
+
+    for ax, distortion in zip(axes, DISTORTION_TYPES):
+        rows = grouped.get(distortion, [])
+        if not rows:
+            ax.set_visible(False)
+            continue
+
+        x_vals = [row["level"] for row in rows]
+        for key in ("pretrained", "enhanced", "finetuned"):
+            if key == "enhanced":
+                style = {
+                    "marker": "s",
+                    "linestyle": "--",
+                    "color": "#f39c12",
+                    "label": enhancement_label(distortion),
+                }
+            else:
+                style = series_style[key]
+            ax.plot(
+                x_vals,
+                [row[key] for row in rows],
+                marker=style["marker"],
+                linestyle=style["linestyle"],
+                color=style["color"],
+                linewidth=2,
+                markersize=7,
+                label=style["label"],
+            )
+
+        ax.set_xlabel(xlabels[distortion])
+        ax.set_ylabel("Recall @ IoU 0.5")
+        ax.set_title(distortion.replace("_", " ").title())
+        y_max = max(
+            (row[key] for row in rows for key in ("pretrained", "enhanced", "finetuned")),
+            default=0.0,
+        )
+        if baseline_recall is not None:
+            ax.axhline(
+                baseline_recall,
+                color="#3498db",
+                linestyle=":",
+                linewidth=2,
+                label=f"Clean baseline ({baseline_recall:.2f})",
+            )
+            y_max = max(y_max, baseline_recall)
+        ax.set_ylim(0, max(0.55, y_max * 1.12))
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8, loc="lower left")
+
+    if subtitle:
+        fig.suptitle(f"{title}\n{subtitle}", fontsize=13)
+    else:
+        fig.suptitle(title, fontsize=13)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def save_detection_finetune_summary_gain_plot(
+    grouped: dict[str, list[dict]],
+    output_path: Path,
+    *,
+    title: str = "YOLO fine-tuning — recall gain over pretrained",
+) -> Path:
+    """Bar chart of fine-tuned minus pretrained recall for every distortion level."""
+    ensure_output_dirs()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    labels: list[str] = []
+    gains: list[float] = []
+    colors: list[str] = []
+    palette = {"noise": "#3498db", "low_light": "#9b59b6", "jpeg": "#e67e22"}
+
+    for distortion in DISTORTION_TYPES:
+        for row in grouped.get(distortion, []):
+            labels.append(row["tag"].replace("_", " "))
+            gain = row["finetuned"] - row["pretrained"]
+            gains.append(gain)
+            colors.append(palette[distortion])
+
+    fig, ax = plt.subplots(figsize=(max(10, 0.55 * len(labels)), 5))
+    bars = ax.bar(labels, gains, color=colors, edgecolor="white", linewidth=0.8)
+    ax.axhline(0, color="#333333", linewidth=0.8)
+    ax.set_ylabel("Recall gain (fine-tuned − pretrained)")
+    ax.set_title(title)
+    ax.tick_params(axis="x", rotation=35, labelsize=8)
+    ax.grid(axis="y", alpha=0.3)
+
+    for bar, gain in zip(bars, gains):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + (0.008 if gain >= 0 else -0.018),
+            f"+{gain:.2f}" if gain >= 0 else f"{gain:.2f}",
+            ha="center",
+            va="bottom" if gain >= 0 else "top",
+            fontsize=8,
+        )
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def save_detection_finetune_summary_table_plot(
+    grouped: dict[str, list[dict]],
+    output_path: Path,
+    *,
+    title: str = "YOLO fine-tuning — recall by condition",
+    baseline_recall: float | None = None,
+) -> Path:
+    """Heatmap-style table of pretrained / enhanced / fine-tuned recall."""
+    ensure_output_dirs()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    rows: list[list[str | float]] = []
+    for distortion in DISTORTION_TYPES:
+        for item in grouped.get(distortion, []):
+            rows.append(
+                [
+                    item["tag"],
+                    item["pretrained"],
+                    item["enhanced"],
+                    item["finetuned"],
+                    item["finetuned"] - item["pretrained"],
+                ]
+            )
+
+    if not rows:
+        raise ValueError("No fine-tune batch results to plot.")
+
+    labels = [row[0] for row in rows]
+    col_names = ["Pretrained", "Enhanced", "Fine-tuned"]
+    values = np.array([[row[1], row[2], row[3]] for row in rows], dtype=float)
+    if baseline_recall is not None:
+        col_names = ["Clean baseline"] + col_names
+        baseline_col = np.full((len(rows), 1), baseline_recall, dtype=float)
+        values = np.hstack([baseline_col, values])
+
+    fig, ax = plt.subplots(figsize=(8, max(4, 0.35 * len(labels))))
+    im = ax.imshow(values, aspect="auto", cmap="YlGn", vmin=0, vmax=0.5)
+    ax.set_xticks(range(len(col_names)))
+    ax.set_xticklabels(col_names)
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.set_title(title)
+
+    for i in range(len(labels)):
+        for j in range(values.shape[1]):
+            ax.text(j, i, f"{values[i, j]:.3f}", ha="center", va="center", fontsize=8, color="#222222")
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02)
+    cbar.set_label("Recall @ IoU 0.5")
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
 def save_comparison_bars(
     labels: list[str],
     values: list[float],
@@ -234,16 +474,137 @@ def save_comparison_bars(
     ylabel: str,
     title: str,
     output_path: Path,
+    colors: list[str] | None = None,
+    baseline: float | None = None,
+    baseline_label: str = "Clean baseline",
 ) -> Path:
     """Save a bar chart comparing metric values across conditions."""
     ensure_output_dirs()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.bar(labels, values)
+    fig, ax = plt.subplots(figsize=(max(8, 1.8 * len(labels)), 5))
+    bar_colors = colors or ["#3498db", "#2ecc71"][: len(labels)]
+    bars = ax.bar(labels, values, color=bar_colors, edgecolor="white", linewidth=0.8)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
-    ax.tick_params(axis="x", rotation=20)
+    ax.tick_params(axis="x", rotation=15)
+    y_top = max(max(values), baseline or 0.0)
+    ax.set_ylim(0, max(y_top * 1.15, 0.05))
+    if baseline is not None:
+        ax.axhline(
+            baseline,
+            color="#3498db",
+            linestyle=":",
+            linewidth=2,
+            label=f"{baseline_label} ({baseline:.3f})",
+        )
+        ax.legend(fontsize=9, loc="upper right")
+    for bar, val in zip(bars, values):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.01,
+            f"{val:.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+        )
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def save_finetune_training_curves(results_csv: Path, output_path: Path, title: str) -> Path:
+    """Plot YOLO training losses and validation metrics from Ultralytics results.csv."""
+    import csv
+
+    ensure_output_dirs()
+    epochs: list[int] = []
+    box_loss: list[float] = []
+    cls_loss: list[float] = []
+    map50: list[float] = []
+    recall: list[float] = []
+
+    with results_csv.open(encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            epochs.append(int(row["epoch"]))
+            box_loss.append(float(row["train/box_loss"]))
+            cls_loss.append(float(row["train/cls_loss"]))
+            map50.append(float(row["metrics/mAP50(B)"]))
+            recall.append(float(row["metrics/recall(B)"]))
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+
+    axes[0].plot(epochs, box_loss, label="box loss", marker="o", markersize=3)
+    axes[0].plot(epochs, cls_loss, label="cls loss", marker="s", markersize=3)
+    axes[0].set_xlabel("Epoch")
+    axes[0].set_ylabel("Training loss")
+    axes[0].set_title("Training losses")
+    axes[0].grid(alpha=0.3)
+    axes[0].legend()
+
+    axes[1].plot(epochs, map50, label="mAP@50", marker="o", markersize=3)
+    axes[1].plot(epochs, recall, label="recall", marker="s", markersize=3)
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylabel("Validation metric")
+    axes[1].set_title("Validation metrics (noisy val set)")
+    axes[1].grid(alpha=0.3)
+    axes[1].legend()
+
+    fig.suptitle(title, fontsize=13)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def save_segformer_training_curves(log_history: list[dict], output_path: Path, title: str) -> Path:
+    """Plot SegFormer training loss and validation mIoU from HuggingFace Trainer log history."""
+    ensure_output_dirs()
+    train_epochs: list[float] = []
+    train_loss: list[float] = []
+    eval_epochs: list[float] = []
+    eval_miou: list[float] = []
+    eval_loss: list[float] = []
+
+    for entry in log_history:
+        epoch = entry.get("epoch")
+        if epoch is None:
+            continue
+        if "loss" in entry and "eval_loss" not in entry:
+            train_epochs.append(float(epoch))
+            train_loss.append(float(entry["loss"]))
+        if "eval_miou" in entry:
+            eval_epochs.append(float(epoch))
+            eval_miou.append(float(entry["eval_miou"]))
+            if "eval_loss" in entry:
+                eval_loss.append(float(entry["eval_loss"]))
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+
+    if train_epochs:
+        axes[0].plot(train_epochs, train_loss, marker="o", markersize=3, label="train loss")
+    if eval_epochs and eval_loss:
+        axes[0].plot(eval_epochs, eval_loss, marker="s", markersize=3, label="val loss")
+    axes[0].set_xlabel("Epoch")
+    axes[0].set_ylabel("Loss")
+    axes[0].set_title("Training / validation loss")
+    axes[0].grid(alpha=0.3)
+    axes[0].legend()
+
+    if eval_epochs and eval_miou:
+        axes[1].plot(eval_epochs, eval_miou, marker="o", markersize=3, color="#2ecc71")
+        axes[1].set_xlabel("Epoch")
+        axes[1].set_ylabel("mIoU")
+        axes[1].set_title("Validation mIoU (distorted val set)")
+        axes[1].grid(alpha=0.3)
+        axes[1].set_ylim(0, max(max(eval_miou) * 1.15, 0.05))
+    else:
+        axes[1].axis("off")
+        axes[1].text(0.5, 0.5, "No validation mIoU logged", ha="center", va="center")
+
+    fig.suptitle(title, fontsize=13)
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)

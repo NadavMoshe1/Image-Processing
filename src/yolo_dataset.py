@@ -120,6 +120,7 @@ def build_distorted_yolo_dataset(
     root = dataset_root(distortion, level)
     manifest_file = manifest_path(distortion, level)
     if manifest_file.exists() and not rebuild:
+        write_dataset_yaml(root)
         print(f"Dataset already exists: {root} (use --rebuild to recreate)")
         return root
 
@@ -197,7 +198,7 @@ def save_yolo_preview(
     for row, stem in enumerate(stems):
         img = cv2.imread(str(root / "images" / "train" / f"{stem}.jpg"))
         lbl_path = root / "labels" / "train" / f"{stem}.txt"
-        boxes = _yolo_txt_to_boxes(lbl_path, img.shape[1], img.shape[0])
+        boxes = load_yolo_label_boxes(lbl_path, img.shape[1], img.shape[0])
         vis = draw_detection_boxes(img, boxes)
         axes[row].imshow(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
         axes[row].axis("off")
@@ -213,7 +214,7 @@ def save_yolo_preview(
     return out
 
 
-def _yolo_txt_to_boxes(label_path: Path, img_w: int, img_h: int) -> list[dict]:
+def load_yolo_label_boxes(label_path: Path, img_w: int, img_h: int) -> list[dict]:
     if not label_path.exists():
         return []
     boxes: list[dict] = []

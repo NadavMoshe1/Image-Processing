@@ -7,6 +7,20 @@ import numpy as np
 
 from src.paths import DISTORTION_TYPES
 
+ENHANCEMENT_LABELS = {
+    "noise": "NLM",
+    "low_light": "CLAHE",
+    "jpeg": "Bilateral",
+}
+
+
+def enhancement_label(distortion: str) -> str:
+    """Short plot label for the classical restoration paired with a distortion type."""
+    try:
+        return ENHANCEMENT_LABELS[distortion]
+    except KeyError as exc:
+        raise ValueError(f"Unknown distortion: {distortion}. Choose from {DISTORTION_TYPES}") from exc
+
 
 def denoise_nlm(
     image: np.ndarray,

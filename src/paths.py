@@ -15,6 +15,7 @@ DRIVABLE_COLOR_ROOT = PROJECT_ROOT / "bdd100k_drivable_maps" / "color_labels"
 DISTORTED_DIR = DATA_DIR / "distorted"
 ENHANCED_DIR = DATA_DIR / "enhanced"
 YOLO_DATASET_ROOT = DATA_DIR / "yolo_distorted"
+SEG_DATASET_ROOT = DATA_DIR / "seg_distorted"
 
 # --- Outputs ---
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
@@ -36,6 +37,27 @@ LOW_LIGHT_GAMMA = [0.75, 0.5, 0.35, 0.2]
 
 DISTORTION_TYPES = ("noise", "low_light", "jpeg")
 
+# Expected layout under data/ (see scripts/setup_data.py):
+#   bdd100K_images_10k/10k/{train,val,test}/*.jpg
+#   bdd100k_label/100k/{train,val,test}/*.json
+#   bdd100k_seg_maps/labels/{train,val,test}/*_train_id.png
+#   bdd100k_seg_maps/color_labels/{train,val,test}/*_train_color.png
+#   yolo_distorted/{distortion}_{level_tag}/  (detection fine-tuning exports)
+#   seg_distorted/{distortion}_{level_tag}/   (segmentation fine-tuning exports)
+
+
+def _ensure_dir(path: Path) -> None:
+    """Create a directory; recover from a broken junction/symlink on Windows."""
+    if path.is_symlink():
+        path.unlink()
+    elif path.exists() and not path.is_dir():
+        path.unlink()
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except FileExistsError:
+        if not path.is_dir():
+            raise
+
 
 def ensure_output_dirs() -> None:
     """Create standard output directories if they do not exist."""
@@ -50,6 +72,7 @@ def ensure_output_dirs() -> None:
         DISTORTED_DIR,
         ENHANCED_DIR,
         YOLO_DATASET_ROOT,
+        SEG_DATASET_ROOT,
         FINETUNE_DIR,
     ):
-        path.mkdir(parents=True, exist_ok=True)
+        _ensure_dir(path)

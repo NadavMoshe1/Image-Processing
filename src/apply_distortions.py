@@ -231,23 +231,28 @@ def save_intensity_preview(split: str, preview_seed: int, output_path: Path) -> 
             ax = axes[row, col]
             ax.imshow(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
             ax.axis("off")
-            if row == 0:
-                ax.set_title(title, fontsize=11, fontweight="bold")
-            if col == 0:
-                ax.set_ylabel(
-                    _PREVIEW_DISTORTION_NAMES[distortion],
-                    rotation=90,
-                    labelpad=40,
-                    fontsize=11,
-                    fontweight="bold",
-                )
+            ax.set_title(title, fontsize=11, fontweight="bold")
 
     fig.suptitle(
-        f"Distortion intensity sweep — {image_path.name}",
+        f"Distortion intensity sweep - {image_path.name}",
         fontsize=13,
         y=1.0,
     )
     fig.tight_layout()
+    fig.subplots_adjust(left=0.09)
+    for row, distortion in enumerate(DISTORTION_TYPES):
+        pos = axes[row, 0].get_position()
+        y_center = (pos.y0 + pos.y1) / 2
+        fig.text(
+            0.025,
+            y_center,
+            _PREVIEW_DISTORTION_NAMES[distortion],
+            rotation=90,
+            va="center",
+            ha="center",
+            fontsize=12,
+            fontweight="bold",
+        )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)

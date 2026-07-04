@@ -21,11 +21,31 @@ from src.bdd100k_utils import (
     overlay_seg_mask,
     select_paired_images,
 )
-from src.distortions import apply_distortion, default_levels
-from src.enhancements import enhance_for_distortion
-from src.evaluate import compute_miou, save_per_class_miou_chart, save_robustness_summary_plot
-from src.paths import BASELINE_SEGMENTATION_DIR, DISTORTION_TYPES, FIGURES_DIR, METRICS_DIR, ensure_output_dirs
+from src.distortions import apply_distortion, default_levels, level_tag
+from src.enhancements import enhance_for_distortion, enhancement_label
+from src.evaluate import (
+    compute_miou,
+    save_comparison_bars,
+    save_per_class_miou_chart,
+    save_robustness_summary_plot,
+    save_segformer_training_curves,
+)
+from src.paths import (
+    BASELINE_SEGMENTATION_DIR,
+    DISTORTION_TYPES,
+    FIGURES_DIR,
+    FINETUNE_DIR,
+    METRICS_DIR,
+    ensure_output_dirs,
+)
 from src.robustness import level_seed
+from src.seg_dataset import (
+    build_distorted_seg_dataset,
+    dataset_root,
+    load_manifest,
+    load_seg_mask_from_dataset,
+)
+from src.yolo_dataset import default_finetune_level
 
 # Cityscapes palette (19 classes) for prediction overlay — BGR
 CITYSCAPES_COLORS = np.array(
@@ -316,8 +336,435 @@ def run_enhanced(split: str, num_images: int | None, model_id: str) -> None:
     run_robustness(split, num_images or 10, 42, model_id)
 
 
-def run_finetune(split: str, distortion: str, model_id: str) -> None:
-    raise NotImplementedError("Implemented in Step 8")
+def run_build_dataset(
+    split: str,
+    distortion: str,
+    *,
+    level: float | int | None = None,
+    num_train: int = 300,
+    num_val: int = 50,
+    seed: int = 42,
+    rebuild: bool = False,
+) -> Path:
+    level = level if level is not None else default_finetune_level(distortion)
+    if distortion == "jpeg":
+        level = int(level)
+    return build_distorted_seg_dataset(
+        distortion,
+        level,
+        split=split,
+        num_train=num_train,
+        num_val=num_val,
+        seed=seed,
+        rebuild=rebuild,
+    )
+
+
+class SegFinetuneDataset(torch.utils.data.Dataset):
+    """Distorted images + unchanged semantic masks for SegFormer fine-tuning."""
+
+    def __init__(self, root: Path, split: str, stems: list[str], processor) -> None:
+        self.root = root
+        self.split = split
+        self.stems = stems
+        self.processor = processor
+
+    def __len__(self) -> int:
+        return len(self.stems)
+
+    def __getitem__(self, idx: int) -> dict:
+        stem = self.stems[idx]
+        image = cv2.imread(str(self.root / "images" / self.split / f"{stem}.jpg"))
+        if image is None:
+            raise FileNotFoundError(f"Missing image: {stem}")
+        mask = load_seg_mask_from_dataset(self.root, self.split, stem)
+        if mask is None:
+            raise FileNotFoundError(f"Missing mask: {stem}")
+
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        encoded = self.processor(rgb, mask, return_tensors="pt")
+        return {k: v.squeeze(0) for k, v in encoded.items()}
+
+
+def _segformer_run_name(distortion: str, level: float | int) -> str:
+    return f"segformer_{distortion}_{level_tag(distortion, level)}"
+
+
+def _compute_segformer_eval_metrics(eval_pred) -> dict[str, float]:
+    logits, labels = eval_pred
+    if isinstance(logits, tuple):
+        logits = logits[0]
+    logits_t = torch.from_numpy(logits)
+    labels_t = torch.from_numpy(labels)
+    upsampled = torch.nn.functional.interpolate(
+        logits_t,
+        size=labels_t.shape[-2:],
+        mode="bilinear",
+        align_corners=False,
+    )
+    preds = upsampled.argmax(dim=1).numpy()
+    labels_np = labels_t.numpy()
+
+    mious: list[float] = []
+    for pred_mask, gt_mask in zip(preds, labels_np):
+        mious.append(compute_miou(pred_mask, gt_mask)["miou"])
+    return {"miou": float(np.mean(mious)) if mious else 0.0}
+
+
+def _load_segformer_model(model_path: str, device: str):
+    processor = AutoImageProcessor.from_pretrained(model_path)
+    model = AutoModelForSemanticSegmentation.from_pretrained(model_path).to(device)
+    model.eval()
+    return model, processor
+
+
+def run_finetune(
+    split: str,
+    distortion: str,
+    model_id: str,
+    *,
+    level: float | int | None = None,
+    num_train: int = 300,
+    num_val: int = 50,
+    seed: int = 42,
+    epochs: int = 30,
+    batch: int = 2,
+    grad_accum: int = 2,
+    learning_rate: float = 6e-5,
+    rebuild_dataset: bool = False,
+) -> dict:
+    """Build distorted seg dataset and fine-tune SegFormer."""
+    from transformers import Trainer, TrainingArguments
+
+    ensure_output_dirs()
+    level = level if level is not None else default_finetune_level(distortion)
+    if distortion == "jpeg":
+        level = int(level)
+
+    build_distorted_seg_dataset(
+        distortion,
+        level,
+        split=split,
+        num_train=num_train,
+        num_val=num_val,
+        seed=seed,
+        rebuild=rebuild_dataset,
+    )
+    manifest = load_manifest(distortion, level)
+    root = dataset_root(distortion, level)
+    tag = level_tag(distortion, level)
+    run_name = _segformer_run_name(distortion, level)
+    output_dir = FINETUNE_DIR / run_name
+
+    processor = AutoImageProcessor.from_pretrained(model_id)
+    model = AutoModelForSemanticSegmentation.from_pretrained(model_id)
+
+    train_ds = SegFinetuneDataset(root, "train", manifest["train"], processor)
+    val_ds = SegFinetuneDataset(root, "val", manifest["val"], processor)
+
+    use_cuda = torch.cuda.is_available()
+    training_args = TrainingArguments(
+        output_dir=str(output_dir),
+        learning_rate=learning_rate,
+        num_train_epochs=epochs,
+        per_device_train_batch_size=batch,
+        per_device_eval_batch_size=batch,
+        gradient_accumulation_steps=grad_accum,
+        eval_strategy="epoch",
+        save_strategy="epoch",
+        save_total_limit=1,
+        load_best_model_at_end=True,
+        metric_for_best_model="miou",
+        greater_is_better=True,
+        logging_steps=max(1, len(train_ds) // (batch * grad_accum * 5)),
+        fp16=use_cuda,
+        dataloader_num_workers=0,
+        remove_unused_columns=False,
+        report_to=[],
+        seed=seed,
+    )
+
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_ds,
+        eval_dataset=val_ds,
+        compute_metrics=_compute_segformer_eval_metrics,
+    )
+
+    print(f"Fine-tuning SegFormer — {distortion} ({tag}) on {len(train_ds)} train / {len(val_ds)} val...")
+    trainer.train()
+    trainer.save_model(str(output_dir))
+    processor.save_pretrained(str(output_dir))
+
+    log_history = trainer.state.log_history
+    curves_path = FIGURES_DIR / f"segmentation_finetune_training_{distortion}_{tag}.png"
+    save_segformer_training_curves(
+        log_history,
+        curves_path,
+        title=f"SegFormer fine-tuning — {distortion} ({tag})",
+    )
+
+    summary = {
+        "split": split,
+        "distortion": distortion,
+        "level": level,
+        "seed": seed,
+        "num_train": len(manifest["train"]),
+        "num_val": len(manifest["val"]),
+        "epochs": epochs,
+        "batch": batch,
+        "grad_accum": grad_accum,
+        "base_model": model_id,
+        "dataset_root": str(root.resolve()),
+        "output_dir": str(output_dir.resolve()),
+        "run_name": run_name,
+        "log_history": log_history,
+    }
+    out_json = METRICS_DIR / f"segmentation_finetune_{distortion}_{tag}.json"
+    out_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print(f"Fine-tuning complete. Saved model: {output_dir}")
+    print(f"Saved training summary: {out_json}")
+    print(f"Saved training curves: {curves_path}")
+    return summary
+
+
+def save_finetune_preview_grid(
+    stems: list[str],
+    root: Path,
+    pretrained_model,
+    pretrained_processor,
+    finetuned_model,
+    finetuned_processor,
+    device: str,
+    *,
+    distortion: str,
+    tag: str,
+) -> Path:
+    """Side-by-side GT / pretrained / fine-tuned segmentation on distorted val images."""
+    n = len(stems)
+    fig, axes = plt.subplots(n, 4, figsize=(16, 4 * n))
+    if n == 1:
+        axes = np.expand_dims(axes, axis=0)
+
+    col_titles = ["Distorted input", "Ground truth", "Pretrained", "Fine-tuned"]
+
+    for row, stem in enumerate(stems):
+        img_path = root / "images" / "val" / f"{stem}.jpg"
+        image = cv2.imread(str(img_path))
+        gt_mask = load_seg_mask_from_dataset(root, "val", stem)
+        if image is None or gt_mask is None:
+            continue
+
+        pred_pre = predict_segmentation(pretrained_model, pretrained_processor, image, device)
+        pred_ft = predict_segmentation(finetuned_model, finetuned_processor, image, device)
+        m_pre = compute_miou(pred_pre, gt_mask)["miou"]
+        m_ft = compute_miou(pred_ft, gt_mask)["miou"]
+
+        gt_color = mask_to_color(gt_mask)
+        panels = [
+            cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
+            cv2.cvtColor(overlay_seg_mask(image, gt_color), cv2.COLOR_BGR2RGB),
+            cv2.cvtColor(overlay_seg_mask(image, mask_to_color(pred_pre)), cv2.COLOR_BGR2RGB),
+            cv2.cvtColor(overlay_seg_mask(image, mask_to_color(pred_ft)), cv2.COLOR_BGR2RGB),
+        ]
+        for col, panel in enumerate(panels):
+            axes[row, col].imshow(panel)
+            axes[row, col].axis("off")
+            if row == 0:
+                axes[row, col].set_title(col_titles[col], fontsize=11)
+            if col == 0:
+                axes[row, col].set_ylabel(
+                    f"{stem}\nmIoU: {m_pre:.2f} → {m_ft:.2f}",
+                    rotation=90,
+                    labelpad=40,
+                    fontsize=8,
+                )
+
+    fig.suptitle(f"Fine-tuning segmentation preview — {distortion} ({tag})", fontsize=13)
+    fig.tight_layout()
+    out = FIGURES_DIR / f"segmentation_finetune_preview_{distortion}_{tag}.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved preview grid: {out}")
+    return out
+
+
+def run_finetune_plots(
+    distortion: str,
+    level: float | int | None = None,
+    *,
+    num_preview: int = 3,
+    model_id: str = "nvidia/segformer-b0-finetuned-cityscapes-512-1024",
+) -> None:
+    """Generate training curves and qualitative preview figures for a seg fine-tune run."""
+    ensure_output_dirs()
+    level = level if level is not None else default_finetune_level(distortion)
+    if distortion == "jpeg":
+        level = int(level)
+
+    tag = level_tag(distortion, level)
+    run_name = _segformer_run_name(distortion, level)
+    output_dir = FINETUNE_DIR / run_name
+    train_json = METRICS_DIR / f"segmentation_finetune_{distortion}_{tag}.json"
+
+    if train_json.exists():
+        log_history = json.loads(train_json.read_text(encoding="utf-8")).get("log_history", [])
+        curves_path = FIGURES_DIR / f"segmentation_finetune_training_{distortion}_{tag}.png"
+        save_segformer_training_curves(
+            log_history,
+            curves_path,
+            title=f"SegFormer fine-tuning — {distortion} ({tag})",
+        )
+        print(f"Saved training curves: {curves_path}")
+    elif not (FIGURES_DIR / f"segmentation_finetune_training_{distortion}_{tag}.png").exists():
+        print("Skipping training curves — no training log found.")
+
+    if not output_dir.exists():
+        print("Skipping preview grid — fine-tuned model not found.")
+        return
+
+    manifest = load_manifest(distortion, level)
+    root = dataset_root(distortion, level)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    pretrained_model, pretrained_processor = _load_segformer_model(model_id, device)
+    finetuned_model, finetuned_processor = _load_segformer_model(str(output_dir), device)
+
+    eval_json = METRICS_DIR / f"segmentation_finetune_eval_{distortion}_{tag}.json"
+    val_stems = manifest["val"]
+    if eval_json.exists():
+        eval_data = json.loads(eval_json.read_text(encoding="utf-8"))
+        ranked = sorted(
+            eval_data.get("per_image", []),
+            key=lambda row: row["finetuned_miou"] - row["pretrained_miou"],
+            reverse=True,
+        )
+        preview_stems = [row["image"].replace(".jpg", "") for row in ranked[:num_preview]]
+    else:
+        preview_stems = val_stems[:num_preview]
+
+    if preview_stems:
+        save_finetune_preview_grid(
+            preview_stems,
+            root,
+            pretrained_model,
+            pretrained_processor,
+            finetuned_model,
+            finetuned_processor,
+            device,
+            distortion=distortion,
+            tag=tag,
+        )
+
+
+def run_finetune_eval(
+    split: str,
+    distortion: str,
+    model_id: str,
+    *,
+    level: float | int | None = None,
+    seed: int = 42,
+) -> dict:
+    """Compare pretrained vs enhanced vs fine-tuned mIoU on distorted val images."""
+    ensure_output_dirs()
+    level = level if level is not None else default_finetune_level(distortion)
+    if distortion == "jpeg":
+        level = int(level)
+
+    manifest = load_manifest(distortion, level)
+    run_name = _segformer_run_name(distortion, level)
+    finetuned_dir = FINETUNE_DIR / run_name
+    if not finetuned_dir.exists():
+        raise SystemExit(
+            f"Fine-tuned model not found: {finetuned_dir}\n"
+            "Run --mode finetune first."
+        )
+
+    root = dataset_root(distortion, level)
+    val_stems = manifest["val"]
+    if not val_stems:
+        raise SystemExit("No val images in dataset manifest.")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    pretrained_model, pretrained_processor = _load_segformer_model(model_id, device)
+    finetuned_model, finetuned_processor = _load_segformer_model(str(finetuned_dir), device)
+
+    pretrained_mious: list[float] = []
+    enhanced_mious: list[float] = []
+    finetuned_mious: list[float] = []
+    per_image: list[dict] = []
+
+    for stem in tqdm(val_stems, desc="seg finetune eval"):
+        val_img_path = root / "images" / "val" / f"{stem}.jpg"
+        if not val_img_path.exists():
+            continue
+        distorted = cv2.imread(str(val_img_path))
+        gt_mask = load_seg_mask_from_dataset(root, "val", stem)
+        if distorted is None or gt_mask is None:
+            continue
+
+        enhanced = enhance_for_distortion(distorted, distortion)
+        m_pre = _eval_image_segmentation(pretrained_model, pretrained_processor, device, distorted, gt_mask)
+        m_enh = _eval_image_segmentation(pretrained_model, pretrained_processor, device, enhanced, gt_mask)
+        m_ft = _eval_image_segmentation(finetuned_model, finetuned_processor, device, distorted, gt_mask)
+
+        pretrained_mious.append(m_pre["miou"])
+        enhanced_mious.append(m_enh["miou"])
+        finetuned_mious.append(m_ft["miou"])
+        per_image.append(
+            {
+                "image": f"{stem}.jpg",
+                "pretrained_miou": m_pre["miou"],
+                "enhanced_miou": m_enh["miou"],
+                "finetuned_miou": m_ft["miou"],
+            }
+        )
+
+    if not per_image:
+        raise SystemExit(
+            "No val images evaluated. Check that data/seg_distorted/ contains "
+            "images and masks for the requested distortion."
+        )
+
+    mean_pretrained = float(np.mean(pretrained_mious))
+    mean_enhanced = float(np.mean(enhanced_mious))
+    mean_finetuned = float(np.mean(finetuned_mious))
+    tag = level_tag(distortion, level)
+    summary = {
+        "split": split,
+        "distortion": distortion,
+        "level": level,
+        "seed": seed,
+        "num_val_images": len(per_image),
+        "pretrained_model": model_id,
+        "finetuned_dir": str(finetuned_dir),
+        "mean_miou_pretrained": mean_pretrained,
+        "mean_miou_enhanced": mean_enhanced,
+        "mean_miou_finetuned": mean_finetuned,
+        "per_image": per_image,
+    }
+    out_json = METRICS_DIR / f"segmentation_finetune_eval_{distortion}_{tag}.json"
+    out_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+    plot_path = FIGURES_DIR / f"segmentation_finetune_{distortion}_{tag}.png"
+    save_comparison_bars(
+        ["Pretrained", enhancement_label(distortion), "Fine-tuned"],
+        [mean_pretrained, mean_enhanced, mean_finetuned],
+        ylabel="mIoU",
+        title=f"Segmentation on distorted val — {distortion} ({tag})",
+        output_path=plot_path,
+        colors=["#95a5a6", "#f39c12", "#2ecc71"],
+    )
+    print(
+        f"Val mIoU — pretrained: {mean_pretrained:.3f}  "
+        f"enhanced: {mean_enhanced:.3f}  "
+        f"fine-tuned: {mean_finetuned:.3f}"
+    )
+    print(f"Saved: {out_json}")
+    print(f"Saved: {plot_path}")
+
+    run_finetune_plots(distortion, level, model_id=model_id)
+    return summary
 
 
 def parse_args() -> argparse.Namespace:
@@ -332,9 +779,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         default="baseline",
-        choices=("baseline", "robustness", "distorted", "enhanced", "finetune", "all"),
+        choices=("baseline", "robustness", "distorted", "enhanced", "build-dataset", "finetune", "finetune-eval", "finetune-plots", "all"),
     )
     parser.add_argument("--distortion", default="noise", choices=("noise", "low_light", "jpeg"))
+    parser.add_argument(
+        "--level",
+        type=float,
+        default=None,
+        help="Distortion intensity for build-dataset / finetune (default: mid level per type)",
+    )
+    parser.add_argument("--num-train", type=int, default=300)
+    parser.add_argument("--num-val", type=int, default=50)
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--batch", type=int, default=2, help="Per-device batch size (SegFormer; use 2 on 6GB GPU)")
+    parser.add_argument("--grad-accum", type=int, default=2)
+    parser.add_argument("--rebuild-dataset", action="store_true")
     return parser.parse_args()
 
 
@@ -350,8 +809,40 @@ def main() -> None:
         run_distorted(args.split, args.num_images, args.model)
     elif args.mode == "enhanced":
         run_enhanced(args.split, args.num_images, args.model)
+    elif args.mode == "build-dataset":
+        run_build_dataset(
+            args.split,
+            args.distortion,
+            level=args.level,
+            num_train=args.num_train,
+            num_val=args.num_val,
+            seed=args.seed,
+            rebuild=args.rebuild_dataset,
+        )
     elif args.mode == "finetune":
-        run_finetune(args.split, args.distortion, args.model)
+        run_finetune(
+            args.split,
+            args.distortion,
+            args.model,
+            level=args.level,
+            num_train=args.num_train,
+            num_val=args.num_val,
+            seed=args.seed,
+            epochs=args.epochs,
+            batch=args.batch,
+            grad_accum=args.grad_accum,
+            rebuild_dataset=args.rebuild_dataset,
+        )
+    elif args.mode == "finetune-eval":
+        run_finetune_eval(
+            args.split,
+            args.distortion,
+            args.model,
+            level=args.level,
+            seed=args.seed,
+        )
+    elif args.mode == "finetune-plots":
+        run_finetune_plots(args.distortion, args.level, model_id=args.model)
     elif args.mode == "all":
         run_baseline(args.split, args.num_images, args.seed, args.model)
         run_robustness(args.split, args.num_images, args.seed, args.model)

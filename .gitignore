@@ -1,14 +1,14 @@
 # --- Dataset (too large for git — download locally, see README) ---
 data/
 bdd100k_drivable_maps/
+yolo_distorted/
 *.zip
-bdd100k_images_10k.zip
-bdd100k_labels.zip
 
 # --- Course materials (local copy) ---
 3002_CousreProject.pdf
+courseProject.pdf
 
-# --- Generated outputs (figures are tracked for GitHub README) ---
+# --- Generated outputs (figures tracked for GitHub README) ---
 outputs/baseline/
 outputs/distorted/
 outputs/enhanced/
@@ -17,6 +17,11 @@ outputs/finetune/
 runs/
 wandb/
 logs/
+
+# Regeneratable fine-tune diagnostics (not embedded in README)
+outputs/figures/*_ultralytics_*
+outputs/figures/*_training_*
+outputs/figures/seg_dataset_preview_*
 
 # --- Model checkpoints ---
 *.pt
