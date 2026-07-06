@@ -19,6 +19,14 @@ def compute_snr_db(clean: np.ndarray, distorted: np.ndarray) -> float:
     return 10.0 * np.log10(signal_power / noise_power)
 
 
+def compute_psnr_db(clean: np.ndarray, distorted: np.ndarray, peak: float = 255.0) -> float:
+    """Compute PSNR in dB between clean and distorted images."""
+    mse = np.mean((clean.astype(np.float64) - distorted.astype(np.float64)) ** 2)
+    if mse < 1e-12:
+        return float("inf")
+    return 10.0 * np.log10((peak**2) / mse)
+
+
 def add_gaussian_noise(image: np.ndarray, snr_db: float, rng: np.random.Generator | None = None) -> np.ndarray:
     """Add Gaussian noise to reach a target SNR (dB)."""
     rng = rng or np.random.default_rng()

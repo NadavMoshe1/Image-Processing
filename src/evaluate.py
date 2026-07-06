@@ -191,15 +191,19 @@ def save_robustness_summary_plot(
     for ax, distortion in zip(axes, DISTORTION_TYPES):
         dist_data = results.get("distorted", {}).get(distortion, {})
         enh_data = results.get("enhanced", {}).get(distortion, {})
+        ft_data = results.get("finetuned", {}).get(distortion, {})
         levels = sorted_level_keys(distortion, list(dist_data.keys()))
 
         x_vals = [float(l) if distortion != "jpeg" else int(l) for l in levels]
         y_dist = [dist_data[l][metric_key] for l in levels]
         y_enh = [enh_data[l][metric_key] for l in levels if l in enh_data]
+        y_ft = [ft_data[l][metric_key] for l in levels if l in ft_data]
 
         ax.plot(x_vals, y_dist, marker="o", label="Distorted")
         if y_enh:
             ax.plot(x_vals[: len(y_enh)], y_enh, marker="s", linestyle="--", label="Enhanced")
+        if y_ft:
+            ax.plot(x_vals[: len(y_ft)], y_ft, marker="^", linestyle="-.", label="Fine-tuned")
         ax.axhline(baseline_val, color="green", linestyle=":", linewidth=1.2, label="Clean baseline")
         ax.set_xlabel(xlabels[distortion])
         ax.set_ylabel(ylabel)
@@ -862,8 +866,75 @@ def evaluate_detection_boxes(
     }
 
 
+def new_detection_class_stats() -> dict[str, dict[str, int]]:
+    return {}
+
+
+def update_detection_class_stats(
+    class_stats: dict[str, dict[str, int]],
+    gt_boxes: list[dict],
+    pred_boxes: list[dict],
+    iou_thresh: float = 0.5,
+) -> None:
+    """Accumulate per-class GT counts and matches (greedy, same as baseline)."""
+    for box in gt_boxes:
+        cat = box["category"]
+        class_stats.setdefault(cat, {"gt": 0, "matched": 0})
+        class_stats[cat]["gt"] += 1
+
+    matched_gt: set[int] = set()
+    for pred in sorted(pred_boxes, key=lambda b: b.get("confidence", 0), reverse=True):
+        best_iou = 0.0
+        best_idx = -1
+        for idx, gt in enumerate(gt_boxes):
+            if idx in matched_gt or pred["category"] != gt["category"]:
+                continue
+            iou = box_iou(pred, gt)
+            if iou > best_iou:
+                best_iou, best_idx = iou, idx
+        if best_idx >= 0 and best_iou >= iou_thresh:
+            matched_gt.add(best_idx)
+            class_stats[pred["category"]]["matched"] += 1
+
+
+def per_class_recall_from_stats(class_stats: dict[str, dict[str, int]]) -> dict[str, float]:
+    return {
+        cat: (v["matched"] / v["gt"] if v["gt"] else 0.0)
+        for cat, v in class_stats.items()
+    }
+
+
+def new_segmentation_class_accumulator() -> dict[int, list[float]]:
+    return {}
+
+
+def update_segmentation_class_accumulator(
+    acc: dict[int, list[float]],
+    per_class_iou: dict[int, float],
+) -> None:
+    for cls_id, iou in per_class_iou.items():
+        acc.setdefault(cls_id, []).append(float(iou))
+
+
+def per_class_miou_from_accumulator(
+    acc: dict[int, list[float]],
+    class_names: list[str],
+) -> dict[str, float]:
+    return {
+        (class_names[cls_id] if cls_id < len(class_names) else str(cls_id)): float(np.mean(vals))
+        for cls_id, vals in acc.items()
+        if vals
+    }
+
+
 def compute_miou(pred_mask: np.ndarray, gt_mask: np.ndarray, num_classes: int = 19) -> dict:
     """Per-class and mean IoU; ignore pixels where gt == 255."""
+    pred_mask = np.squeeze(pred_mask)
+    gt_mask = np.squeeze(gt_mask)
+    if gt_mask.ndim == 3:
+        gt_mask = gt_mask[:, :, 0]
+    if pred_mask.ndim == 3:
+        pred_mask = pred_mask[:, :, 0]
     valid = gt_mask != 255
     pred = pred_mask[valid]
     gt = gt_mask[valid]

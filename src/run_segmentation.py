@@ -27,6 +27,8 @@ from src.evaluate import (
     compute_miou,
     load_segmentation_clean_baseline_miou,
     load_segmentation_finetune_batch_results,
+    new_segmentation_class_accumulator,
+    per_class_miou_from_accumulator,
     save_comparison_bars,
     save_per_class_miou_chart,
     save_robustness_summary_plot,
@@ -34,6 +36,7 @@ from src.evaluate import (
     save_segmentation_finetune_summary_gain_plot,
     save_segmentation_finetune_summary_recall_plot,
     save_segmentation_finetune_summary_table_plot,
+    update_segmentation_class_accumulator,
 )
 from src.paths import (
     BASELINE_SEGMENTATION_DIR,
@@ -108,7 +111,11 @@ def predict_segmentation(
         mode="bilinear",
         align_corners=False,
     )
-    return upsampled.argmax(dim=1)[0].cpu().numpy().astype(np.uint8)
+    pred = upsampled.argmax(dim=1)
+    if pred.dim() == 3:
+        pred = pred[0]
+    out = pred.cpu().numpy().astype(np.uint8)
+    return np.squeeze(out)
 
 
 def run_baseline(split: str, num_images: int, seed: int, model_id: str) -> dict:
@@ -283,6 +290,8 @@ def run_robustness(split: str, num_images: int, seed: int, model_id: str) -> dic
             level_key = str(level)
             rng = np.random.default_rng(level_seed(seed, distortion, level))
             mious_d, mious_e = [], []
+            acc_d = new_segmentation_class_accumulator()
+            acc_e = new_segmentation_class_accumulator()
 
             for image_path in tqdm(image_paths, desc=f"seg {distortion}/{level_key}"):
                 clean = cv2.imread(str(image_path))
@@ -291,16 +300,22 @@ def run_robustness(split: str, num_images: int, seed: int, model_id: str) -> dic
                     continue
                 dist_img = apply_distortion(clean, distortion, level, rng=rng)
                 enh_img = enhance_for_distortion(dist_img, distortion)
-                mious_d.append(_eval_image_segmentation(model, processor, device, dist_img, gt_mask)["miou"])
-                mious_e.append(_eval_image_segmentation(model, processor, device, enh_img, gt_mask)["miou"])
+                res_d = _eval_image_segmentation(model, processor, device, dist_img, gt_mask)
+                res_e = _eval_image_segmentation(model, processor, device, enh_img, gt_mask)
+                mious_d.append(res_d["miou"])
+                mious_e.append(res_e["miou"])
+                update_segmentation_class_accumulator(acc_d, res_d["per_class_iou"])
+                update_segmentation_class_accumulator(acc_e, res_e["per_class_iou"])
 
             distorted[distortion][level_key] = {
                 "level": level,
                 "mean_miou": float(np.mean(mious_d)),
+                "per_class_miou": per_class_miou_from_accumulator(acc_d, SEG_CLASS_NAMES),
             }
             enhanced[distortion][level_key] = {
                 "level": level,
                 "mean_miou": float(np.mean(mious_e)),
+                "per_class_miou": per_class_miou_from_accumulator(acc_e, SEG_CLASS_NAMES),
             }
             print(
                 f"  {distortion} {level_key}: "
@@ -318,6 +333,11 @@ def run_robustness(split: str, num_images: int, seed: int, model_id: str) -> dic
         "enhanced": enhanced,
     }
     out_json = METRICS_DIR / f"segmentation_robustness_{split}.json"
+    if out_json.exists():
+        prev = json.loads(out_json.read_text(encoding="utf-8"))
+        for key in ("finetuned", "finetuned_eval_note"):
+            if key in prev:
+                combined[key] = prev[key]
     out_json.write_text(json.dumps(combined, indent=2), encoding="utf-8")
 
     plot_path = FIGURES_DIR / f"segmentation_robustness_{split}.png"

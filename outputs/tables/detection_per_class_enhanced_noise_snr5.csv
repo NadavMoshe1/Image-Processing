@@ -1,0 +1,10 @@
+class,metric
+car,0.1141
+person,0.0817
+truck,0.0588
+traffic light,0.0211
+traffic sign,0.0027
+bus,0.0000
+motor,0.0000
+rider,0.0000
+bike,0.0000

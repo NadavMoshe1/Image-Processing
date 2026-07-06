@@ -27,6 +27,8 @@ from src.evaluate import (
     box_iou,
     evaluate_detection_boxes,
     load_detection_clean_baseline_recall,
+    new_detection_class_stats,
+    per_class_recall_from_stats,
     save_comparison_bars,
     save_detection_finetune_summary_gain_plot,
     save_detection_finetune_summary_recall_plot,
@@ -35,6 +37,7 @@ from src.evaluate import (
     save_per_class_recall_chart,
     save_robustness_summary_plot,
     load_detection_finetune_batch_results,
+    update_detection_class_stats,
 )
 from src.paths import (
     BASELINE_DETECTION_DIR,
@@ -246,6 +249,8 @@ def run_robustness(split: str, num_images: int, seed: int, model_name: str) -> d
             level_key = str(level)
             rng = np.random.default_rng(level_seed(seed, distortion, level))
             recalls_d, recalls_e = [], []
+            stats_d = new_detection_class_stats()
+            stats_e = new_detection_class_stats()
 
             for image_path in tqdm(image_paths, desc=f"det {distortion}/{level_key}"):
                 clean = cv2.imread(str(image_path))
@@ -254,16 +259,22 @@ def run_robustness(split: str, num_images: int, seed: int, model_name: str) -> d
                 gt_boxes = load_detection_boxes(resolve_label_path(image_path.stem, label_index))
                 dist_img = apply_distortion(clean, distortion, level, rng=rng)
                 enh_img = enhance_for_distortion(dist_img, distortion)
-                recalls_d.append(_eval_image_detection(model, dist_img, gt_boxes)["recall"])
-                recalls_e.append(_eval_image_detection(model, enh_img, gt_boxes)["recall"])
+                pred_d = yolo_predictions_to_boxes(model.predict(dist_img, verbose=False)[0])
+                pred_e = yolo_predictions_to_boxes(model.predict(enh_img, verbose=False)[0])
+                recalls_d.append(evaluate_detection_boxes(gt_boxes, pred_d)["recall"])
+                recalls_e.append(evaluate_detection_boxes(gt_boxes, pred_e)["recall"])
+                update_detection_class_stats(stats_d, gt_boxes, pred_d)
+                update_detection_class_stats(stats_e, gt_boxes, pred_e)
 
             distorted[distortion][level_key] = {
                 "level": level,
                 "mean_recall": float(np.mean(recalls_d)),
+                "per_class_recall": per_class_recall_from_stats(stats_d),
             }
             enhanced[distortion][level_key] = {
                 "level": level,
                 "mean_recall": float(np.mean(recalls_e)),
+                "per_class_recall": per_class_recall_from_stats(stats_e),
             }
             print(
                 f"  {distortion} {level_key}: "
@@ -281,6 +292,11 @@ def run_robustness(split: str, num_images: int, seed: int, model_name: str) -> d
         "enhanced": enhanced,
     }
     out_json = METRICS_DIR / f"detection_robustness_{split}.json"
+    if out_json.exists():
+        prev = json.loads(out_json.read_text(encoding="utf-8"))
+        for key in ("finetuned", "finetuned_eval_note"):
+            if key in prev:
+                combined[key] = prev[key]
     out_json.write_text(json.dumps(combined, indent=2), encoding="utf-8")
 
     plot_path = FIGURES_DIR / f"detection_robustness_{split}.png"

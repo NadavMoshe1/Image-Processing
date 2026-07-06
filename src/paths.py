@@ -20,6 +20,7 @@ SEG_DATASET_ROOT = DATA_DIR / "seg_distorted"
 # --- Outputs ---
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 FIGURES_DIR = OUTPUTS_DIR / "figures"
+TABLES_DIR = OUTPUTS_DIR / "tables"
 BASELINE_DIR = OUTPUTS_DIR / "baseline"
 DISTORTED_OUTPUT_DIR = OUTPUTS_DIR / "distorted"
 ENHANCED_OUTPUT_DIR = OUTPUTS_DIR / "enhanced"
@@ -63,6 +64,7 @@ def ensure_output_dirs() -> None:
     """Create standard output directories if they do not exist."""
     for path in (
         FIGURES_DIR,
+        TABLES_DIR,
         BASELINE_DETECTION_DIR,
         BASELINE_SEGMENTATION_DIR,
         BASELINE_FEATURES_DIR,

@@ -1,0 +1,4 @@
+task,clean_baseline,worst_distortion,distorted_score,enhanced_score,finetuned_score_robustness_set,finetuned_score_ft_val_set,main_conclusion
+ORB matching ratio,1.0,low_light γ=0.2,0.097,0.126,N/A,N/A,CLAHE helps moderate low light; NLM/bilateral often hurt matching
+YOLOv8n recall,0.3194931419940252,noise SNR 5 dB,0.07747764059957583,0.07911893446223192,0.405,0.368,Heavy noise collapses frozen YOLO; fine-tuning recovers recall
+SegFormer mIoU,0.46852056183460966,noise SNR 5 dB,0.25663080384276027,0.2658706854488999,0.561,0.454,Noise blurs boundaries; NLM hurts mild noise; FT helps strongly

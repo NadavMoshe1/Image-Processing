@@ -124,7 +124,7 @@ def load_seg_mask(split: str, stem: str) -> np.ndarray | None:
     path = seg_id_path(split, stem)
     if not path.exists():
         return None
-    mask = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    mask = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     return mask
 
 
