@@ -1,205 +1,159 @@
+---
+marp: true
+theme: default
+paginate: true
+size: 16:9
+---
+
+<!-- _class: lead -->
+
 # Robustness of Vision Algorithms Under Image Degradations
-## Digital Image Processing — Course Project Presentation
 
-**Authors:** Nadav Moshe, Alon Ron  
-**Semester:** 2025–2026
+Digital Image Processing — Course Project
 
----
-
-## Slide 1 — Title
-
-**Robustness of Vision Algorithms Under Image Degradations**
-
-- BDD100K driving scenes
-- Three distortions × four intensity levels
-- ORB · YOLOv8n · SegFormer-b0
+Nadav Moshe · Alon Ron · 2025–2026
 
 ---
 
-## Slide 2 — Motivation
+## The Question
 
-- Autonomous driving sees **noise, low light, compression** before perception runs
-- Question: **classical restoration** vs **model adaptation**?
-- Controlled experiment: clean → distort → restore or fine-tune → measure
+> When dashcam images degrade, do **classical fixes** help — or do we need to **retrain the model**?
 
----
-
-## Slide 3 — Research Question
-
-> When dashcam images degrade, do classical pre-processing fixes help — or do we need to adapt the model?
-
-**Three recovery strategies:**
-1. None (frozen model on distorted input)
-2. Blind enhancement (NLM / CLAHE / bilateral)
-3. Fine-tuning on distorted training data
+- **Distortions:** noise · low light · JPEG
+- **Fixes tested:** enhancement (NLM / CLAHE / bilateral) vs fine-tuning
+- **Tasks:** ORB · YOLOv8n · SegFormer-b0
 
 ---
 
-## Slide 4 — Dataset & Protocol
+## Dataset — BDD100K
 
-| Component | N | Ground truth |
-|-----------|---|--------------|
-| Robustness eval | 100 images | Boxes + masks |
-| YOLO FT train/val | 500 / 100 | Bounding boxes |
-| SegFormer FT train/val | 500 / 100 | Semantic masks |
+100 dashcam images with boxes + segmentation masks (seed 42).
 
-- BDD100K **train** split, fixed seed 42
-- Same 100 images for ORB, YOLO, SegFormer robustness
+![h:430](outputs/figures/eda_samples.png)
 
 ---
 
-## Slide 5 — Distortions
+## Three Distortions, Four Levels Each
 
-| Type | Parameter | Levels |
-|------|-----------|--------|
-| Gaussian noise | SNR (dB) | 30, 20, 10, 5 |
-| Low light | γ | 0.75, 0.5, 0.35, 0.2 |
-| JPEG | Quality Q | 90, 50, 20, 10 |
+| Distortion | Parameter | Levels (mild → severe) |
+|------------|-----------|------------------------|
+| Gaussian noise | SNR (dB) | 30 · 20 · 10 · 5 |
+| Low light | γ | 0.75 · 0.5 · 0.35 · 0.2 |
+| JPEG | Quality *Q* | 90 · 50 · 20 · 10 |
 
-Synthetic, parametric, reproducible (`src/distortions.py`)
-
----
-
-## Slide 6 — Enhancements (blind)
-
-| Distortion | Enhancement |
-|------------|-------------|
-| Noise | Non-Local Means (NLM) |
-| Low light | CLAHE |
-| JPEG | Upscale + bilateral deblocking |
-
-Applied **without** knowing distortion level at test time
+![h:330](outputs/figures/distortion_intensity_train.png)
 
 ---
 
-## Slide 7 — Tasks
+## Distorted vs Enhanced
 
-| Level | Task | Metric |
-|-------|------|--------|
-| Low-level | ORB matching | Match ratio vs clean reference |
-| High-level | YOLOv8n detection | Recall @ IoU 0.5 |
-| High-level | SegFormer-b0 segmentation | Mean IoU (19 classes) |
+Each distortion gets one matched enhancement (NLM · CLAHE · bilateral).
+
+![h:470](outputs/figures/distortion_preview_train.png)
 
 ---
 
-## Slide 8 — Clean Baselines
+## Clean Baselines
 
-| Task | Clean score |
-|------|-------------|
-| ORB matching ratio | 1.000 (by definition) |
-| YOLOv8n recall | 0.319 |
-| SegFormer mIoU | 0.469 |
+| Task | Metric | Clean score |
+|------|--------|-------------|
+| ORB matching | Match ratio | **1.000** |
+| YOLOv8n | Recall @ IoU 0.5 | **0.319** |
+| SegFormer-b0 | Mean IoU | **0.469** |
 
-*100-image subset — trends, not official BDD100K leaderboard*
-
----
-
-## Slide 9 — Worst-Case Robustness (frozen models)
-
-| Task | Worst condition | Distorted | Enhanced |
-|------|-----------------|-----------|----------|
-| ORB | γ = 0.2 | 0.097 | 0.126 |
-| YOLO | SNR 5 dB | 0.077 | 0.079 |
-| SegFormer | SNR 5 dB | 0.257 | 0.266 |
-
-**Classical enhancement rarely recovers frozen deep models**
+*Trends on a 100-image subset — not official leaderboard scores.*
 
 ---
 
-## Slide 10 — Enhancement: ORB Exception
+## ORB — Fragile in Low Light
 
-- **CLAHE** helps low-light ORB (+0.089 at γ = 0.35)
-- **NLM** hurts mild noise ORB (−0.098 at SNR 30 dB)
-- Low-level descriptors respond to pixel statistics differently than CNNs
+Worst case γ = 0.2: matching ratio drops to **0.097**.
+CLAHE helps low light (+0.089); NLM hurts mild noise.
 
----
-
-## Slide 11 — Visual ≠ Task Performance
-
-- NLM smooths boundaries → hurts SegFormer at mild noise
-- CLAHE improves contrast but not YOLO recall on robustness set
-- **Evaluate restoration and downstream metrics separately**
-
-![Distortion preview](outputs/figures/distortion_preview_train.png)
+![h:400](outputs/figures/orb_matching_train.png)
 
 ---
 
-## Slide 12 — Fine-Tuning Setup
+## YOLO — Collapses Under Noise
 
-- 12 jobs per model (3 distortions × 4 levels)
-- 500 distorted train / 100 distorted val per job
-- 30 epochs, GPU training
-- YOLOv8n + SegFormer-b0
+Recall at SNR 5 dB: **0.077** (from 0.319). Enhancement barely helps.
 
----
-
-## Slide 13 — Fine-Tuning Results (FT val set)
-
-**Examples — largest gains:**
-- YOLO noise SNR 10 dB: 0.24 → **0.42** recall
-- SegFormer noise SNR 5 dB: 0.25 → **0.45** mIoU
-
-Domain adaptation on distorted data **strongly** recovers performance
+![h:400](outputs/figures/detection_robustness_train.png)
 
 ---
 
-## Slide 14 — Fine-Tuning on Robustness Set
+## SegFormer — Noise Blurs Boundaries
 
-Fine-tuned checkpoints on the **same 100 images** as frozen models:
+mIoU at SNR 5 dB: **0.257** (from 0.469). NLM even hurts mild noise.
+
+![h:400](outputs/figures/segmentation_robustness_train.png)
+
+---
+
+## Key Insight
+
+> A cleaner-looking image is **not** a better input for the model.
+
+- **NLM** smooths texture → hurts ORB and SegFormer
+- **CLAHE** helps ORB contrast, not deep models
+- **Bilateral** can't restore lost JPEG detail
+
+Classical enhancement rarely recovers frozen deep models.
+
+---
+
+## Fine-Tuning Fixes It
+
+Retrain on distorted data (500 train / 100 val per level, 30 epochs).
 
 | Task | SNR 5 dB distorted | **Fine-tuned** |
-|------|-------------------|----------------|
+|------|-------------------:|---------------:|
 | YOLO recall | 0.077 | **0.405** |
 | SegFormer mIoU | 0.257 | **0.561** |
 
-Script: `scripts/eval_finetune_on_robustness.py`
+Measured on the same 100 images as the frozen models.
 
 ---
 
-## Slide 15 — Recovery Matrix (summary)
+## Fine-Tuning — YOLO
 
-| Distortion | Best strategy | Task most helped |
-|------------|---------------|------------------|
-| Noise | Fine-tuning | YOLO + SegFormer |
-| Low light | CLAHE (ORB); FT (DL) | Mixed |
-| JPEG | Fine-tuning | SegFormer |
+![h:440](outputs/figures/detection_finetune_summary_recall.png)
+
+Fine-tuned recall beats frozen + enhanced at every level.
 
 ---
 
-## Slide 16 — Per-Class Analysis
+## Fine-Tuning — SegFormer
 
-- Clean per-class CSVs: `outputs/tables/detection_per_class_clean.csv`
-- Robustness per-class at SNR 5 dB: distorted / enhanced / fine-tuned
-- Rare classes (traffic sign, rider) — high variance on N = 100
+![h:440](outputs/figures/segmentation_finetune_summary_recall.png)
 
----
-
-## Slide 17 — Limitations
-
-- 100-image subset, synthetic distortions
-- ORB: clean reference, not human correspondence GT
-- Segmentation mIoU: per-image mean
-- Absolute numbers are estimates, not official benchmark scores
+Fine-tuned mIoU beats frozen + enhanced at every level.
 
 ---
 
-## Slide 18 — Conclusions
+## What Works When
 
-1. **Frozen** deep models collapse under heavy noise; enhancement barely helps
-2. **ORB** sometimes benefits from CLAHE; NLM often hurts
-3. **Fine-tuning** is the most reliable recovery for YOLO and SegFormer
-4. Low-level and high-level robustness **diverge** — one fix does not fit all
+| Distortion | Best fix |
+|------------|----------|
+| Gaussian noise | **Fine-tuning** |
+| Low light | CLAHE (ORB) · fine-tuning (deep) |
+| JPEG | **Fine-tuning** |
 
 ---
 
-## Slide 19 — Demo / Q&A
+## Conclusions
 
-**Repository:** [Image-Processing](https://github.com/NadavMoshe1/Image-Processing)
+1. Frozen models fail under heavy noise; enhancement barely helps.
+2. ORB sometimes gains from CLAHE; NLM often hurts.
+3. **Fine-tuning is the reliable fix** for YOLO and SegFormer.
+4. Low-level and high-level robustness diverge.
 
-**Reproduce:**
-```powershell
-python scripts\eval_finetune_on_robustness.py
-python scripts\export_report_tables.py
-```
+---
 
-**Thank you — questions?**
+<!-- _class: lead -->
+
+## Thank You
+
+[github.com/NadavMoshe1/Image-Processing](https://github.com/NadavMoshe1/Image-Processing)
+
+Nadav Moshe · Alon Ron
