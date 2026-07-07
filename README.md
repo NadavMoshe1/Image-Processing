@@ -19,31 +19,6 @@ This project satisfies the course requirements by evaluating three vision tasks 
 
 ---
 
-## Requirement Compliance Summary
-
-| Requirement | Status | Evidence in this project | Remaining caveat |
-|---|---|---|---|
-| Public dataset | ✅ | [BDD100K](https://www.bdd100k.com/) train split | Subset of 100 images for robustness eval, not full benchmark |
-| Dataset with ground truth | ✅ | Bounding boxes + semantic masks | ORB uses clean reference, not human correspondence GT |
-| 3 tasks | ✅ | ORB, YOLOv8n, SegFormer-b0 | — |
-| Low-level and high-level tasks | ✅ | ORB (low-level) + YOLO & SegFormer (high-level) | — |
-| At least one DL model | ✅ | YOLOv8n + SegFormer-b0 | — |
-| 3 distortion methods | ✅ | Noise, low light, JPEG | Synthetic only |
-| Clean-image baseline | ✅ | § Clean Baseline Results | ORB baseline = 1.0 by definition |
-| Distorted-image evaluation | ✅ | Robustness tables + curves | — |
-| Enhanced/restored evaluation | ✅ | NLM / CLAHE / bilateral per distortion | Blind restoration |
-| Fine-tuning | ✅ | YOLO + SegFormer, 12 levels each | FT val set + robustness set (see § Experimental Protocol) |
-| Per-class metrics | ✅ | Clean + robustness CSVs (`outputs/tables/`) | Rare classes high variance on *N* = 100 |
-| Per-SNR / per-intensity metrics | ✅ | All tasks vs SNR, γ, *Q* | Low light / JPEG use γ and *Q* as intensity axes |
-| Result tables | ✅ | Throughout + `outputs/tables/` | — |
-| Graphs and curves | ✅ | `outputs/figures/` | — |
-| Before/after visualizations | ✅ | Distortion preview, FT previews, baselines | — |
-| Input/output examples | ✅ | EDA samples, detection/seg overlays | — |
-| Code/data/output documentation | ✅ | § Repository Structure, § How to Reproduce | Raw BDD100K not committed |
-| Final presentation / PPT | ✅ | [`PRESENTATION.md`](PRESENTATION.md) | Markdown slide deck; export to PPT if required |
-
----
-
 ## Motivation
 
 Autonomous driving systems rely on visual perception under imperfect imaging conditions: sensor noise, poor light, and lossy compression all corrupt the input before it reaches downstream modules. Understanding which algorithms are robust - and whether simple restoration helps - is central to building reliable pipelines.
@@ -302,12 +277,12 @@ CLAHE **improves** low-light matching at γ = 0.35–0.5 (+0.056 to +0.089 recov
 
 ### YOLOv8n
 
-| Distortion | Level | Distorted | Enhanced | Recovery |
-|-------|-----------|----------|----------|
-| SNR 10 dB | 0.207 | 0.211 | +0.004 |
-| SNR 5 dB | 0.077 | 0.079 | +0.002 |
-| γ = 0.2 | 0.131 | 0.158 | +0.027 |
-| *Q* = 10 | 0.225 | 0.247 | +0.022 |
+| Distortion / level | Distorted | Enhanced | Recovery |
+|--------------------|-----------|----------|----------|
+| Noise SNR 10 dB | 0.207 | 0.211 | +0.004 |
+| Noise SNR 5 dB | 0.077 | 0.079 | +0.002 |
+| Low light γ = 0.2 | 0.131 | 0.158 | +0.027 |
+| JPEG *Q* = 10 | 0.225 | 0.247 | +0.022 |
 
 **Analysis.** Enhancement provides **limited** detection recovery. NLM does not restore YOLO features under heavy noise. CLAHE gives modest low-light gains.
 
@@ -438,7 +413,7 @@ A visually cleaner image does not necessarily improve computer-vision metrics. C
 - ORB uses **clean-as-reference** matching, not human correspondence ground truth.
 - Segmentation mIoU uses **per-image mean**, not global confusion-matrix mIoU.
 - **Per-class** metrics on *N* = 100 have high variance for rare classes (traffic sign, rider).
-- Course presentation is provided as **Markdown slides** ([`PRESENTATION.md`](PRESENTATION.md)); convert to PPT if the instructor requires PowerPoint format.
+- Course presentation is maintained as a single **Markdown source** ([`PRESENTATION.md`](PRESENTATION.md)); each slide is copy-paste ready for PowerPoint, or render directly with `marp PRESENTATION.md --pptx` / `--pdf`.
 
 ---
 

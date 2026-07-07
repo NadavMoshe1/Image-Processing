@@ -378,8 +378,8 @@ def save_detection_finetune_summary_gain_plot(
     grouped: dict[str, list[dict]],
     output_path: Path,
     *,
-    title: str = "YOLO fine-tuning — recall gain over pretrained",
-    ylabel: str = "Recall gain (fine-tuned − pretrained)",
+    title: str = "YOLO fine-tuning: recall gain over pretrained",
+    ylabel: str = "Recall gain (fine-tuned minus pretrained)",
 ) -> Path:
     """Bar chart of fine-tuned minus pretrained recall for every distortion level."""
     ensure_output_dirs()
@@ -569,8 +569,8 @@ def save_segmentation_finetune_summary_gain_plot(
     return save_detection_finetune_summary_gain_plot(
         grouped,
         output_path,
-        title="SegFormer fine-tuning — mIoU gain over pretrained",
-        ylabel="mIoU gain (fine-tuned − pretrained)",
+        title="SegFormer fine-tuning: mIoU gain over pretrained",
+        ylabel="mIoU gain (fine-tuned minus pretrained)",
     )
 
 

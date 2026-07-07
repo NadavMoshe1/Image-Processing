@@ -206,7 +206,11 @@ def save_grid(
             if col == 0:
                 ax.set_ylabel(image_path.stem, rotation=90, labelpad=40, fontsize=9)
 
-    fig.suptitle(f"BDD100K EDA — {split} split ({n} samples)", fontsize=14, y=1.01)
+    fig.suptitle(
+        f"BDD100K EDA: {split} split ({n} sample{'s' if n != 1 else ''})",
+        fontsize=14,
+        y=1.01,
+    )
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
