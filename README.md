@@ -2,18 +2,14 @@
 
 **Digital Image Processing - Course Project**  
 **Semester:** 2025-2026  
-**Authors:** Nadav Moshe, Alon Ron
+**Authors:** Nadav Moshe, Alon Ron  
+**Presentation:** [`PRESENTATION.md`](PRESENTATION.md) (source slides) · [`PRESENTATION.pdf`](PRESENTATION.pdf) · [`PRESENTATION.pptx`](PRESENTATION.pptx)
 
 ---
 
-## Key Takeaways
+## Abstract
 
-**Research question:** When dashcam images degrade (noise, low light, JPEG compression), do classical pre-processing fixes help - or do we need to adapt the model?
-
-- **Distortions:** Three synthetic types on BDD100K driving scenes, each at four intensity levels - Gaussian noise (SNR), low light (γ), JPEG compression (*Q*).
-- **Restoration strategies:** (1) none, (2) blind classical enhancement (NLM / CLAHE / bilateral deblocking), (3) **Fine-Tuning** YOLOv8n and SegFormer-b0 on distorted data.
-- **Tasks:** ORB matching ratio (low-level), YOLOv8n detection, SegFormer-b0 segmentation (high-level).
-- **Main findings:** Classical enhancement helps ORB in some low-light cases but rarely helps - and sometimes hurts - frozen deep models. **Fine-Tuning** recovers much of the performance lost to distortion on held-out val images (e.g. YOLO at SNR 10 dB: 0.24 recall pretrained vs **0.42** Fine-Tuned; SegFormer at SNR 5 dB: 0.25 mIoU pretrained vs **0.45** Fine-Tuned). Low-level and high-level robustness diverge: what looks cleaner after denoising is not always what downstream models need.
+Autonomous-driving perception must cope with degraded imagery, so we ask whether the fix belongs in the image (classical restoration) or in the model (adaptation). Using 100 BDD100K dashcam frames, we apply three synthetic distortions - Gaussian noise, low light, and JPEG compression - at four intensity levels each, and evaluate three tasks spanning the vision stack: ORB feature matching (low-level), YOLOv8n detection, and SegFormer-b0 segmentation (high-level). For every distortion we compare three input conditions: unmodified, blind classical enhancement (NLM / CLAHE / bilateral deblocking), and models fine-tuned on distorted data. Classical enhancement helps ORB in some low-light cases but rarely helps - and sometimes hurts - the frozen deep models, whereas fine-tuning recovers most of the lost performance (e.g. YOLO recall at SNR 5 dB rises from 0.077 to **0.405**, SegFormer mIoU from 0.257 to **0.561**). The central finding is that low-level and high-level robustness diverge: an image that looks cleaner after denoising is not necessarily a better input for a downstream model.
 
 This project satisfies the course requirements by evaluating three vision tasks across three controlled distortions. It includes both low-level and high-level methods, uses ground-truth labels for detection and segmentation, compares clean, distorted, enhanced, and fine-tuned settings, and reports quantitative results by distortion intensity together with qualitative input/output visualizations.
 

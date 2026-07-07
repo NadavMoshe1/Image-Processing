@@ -156,12 +156,32 @@ Reference performance on the 100 undistorted images, before any degradation.
 
 ---
 
+## Fine-Tuning in Action: YOLO
+
+Noise SNR 10 dB: fine-tuned YOLO recovers the cars and van the pretrained model misses.
+
+![w:920](outputs/figures/detection_finetune_example.png)
+
+Left: pretrained · right: fine-tuned (green = detections).
+
+---
+
 ## Fine-Tuning: SegFormer
 
 - Fine-tuning improves mIoU at **every** level (bars show fine-tuned minus pretrained).
 - Largest gains under severe degradation: **+0.21** at SNR 5 dB, **+0.14** at JPEG *Q* = 10, **+0.11** at SNR 10 dB.
 
 ![h:380](outputs/figures/segmentation_finetune_summary_gain.png)
+
+---
+
+## Fine-Tuning in Action: SegFormer
+
+Noise SNR 10 dB: fine-tuned SegFormer restores road, cars, and boundaries that the pretrained model loses.
+
+![w:1000](outputs/figures/segmentation_finetune_example.png)
+
+Columns: distorted input · ground truth · pretrained · fine-tuned.
 
 ---
 
