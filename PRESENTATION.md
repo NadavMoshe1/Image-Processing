@@ -143,7 +143,7 @@ Reference performance on the 100 undistorted images, before any degradation.
 |------|-------------|-----------------:|---------------:|
 | YOLO recall | Noise SNR 5 dB | 0.077 | **0.405** |
 | SegFormer mIoU | Noise SNR 5 dB | 0.257 | **0.561** |
-| SegFormer mIoU | JPEG *Q* = 10 | 0.348 | **0.622** |
+| SegFormer mIoU | JPEG *Q* = 10 | 0.370 | **0.622** |
 
 ---
 

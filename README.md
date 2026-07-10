@@ -277,7 +277,7 @@ CLAHE **improves** low-light matching at γ = 0.35–0.5 (+0.056 to +0.089 recov
 |--------------------|-----------|----------|----------|
 | Noise SNR 10 dB | 0.207 | 0.211 | +0.004 |
 | Noise SNR 5 dB | 0.077 | 0.079 | +0.002 |
-| Low light γ = 0.2 | 0.131 | 0.158 | +0.027 |
+| Low light γ = 0.2 | 0.131 | 0.157 | +0.026 |
 | JPEG *Q* = 10 | 0.225 | 0.247 | +0.022 |
 
 **Analysis.** Enhancement provides **limited** detection recovery. NLM does not restore YOLO features under heavy noise. CLAHE gives modest low-light gains.
@@ -315,8 +315,8 @@ The same FT checkpoints were re-evaluated on the **100-image robustness set** (`
 |------------|-------|------------------|----------|--------------------------------|
 | Noise | SNR 5 dB | 0.077 | 0.079 | **0.405** |
 | Noise | SNR 10 dB | 0.207 | 0.211 | **0.475** |
-| Low light | γ = 0.2 | 0.225 | 0.247 | **0.355** |
-| JPEG | *Q* = 10 | 0.224 | 0.247 | **0.482** |
+| Low light | γ = 0.2 | 0.131 | 0.157 | **0.355** |
+| JPEG | *Q* = 10 | 0.225 | 0.247 | **0.482** |
 
 On the shared robustness set, FT recall stays well above frozen distorted/enhanced at severe degradations (e.g. SNR 5 dB: 0.077 → **0.405**).
 
@@ -342,8 +342,8 @@ On the shared robustness set, FT recall stays well above frozen distorted/enhanc
 |------------|-------|------------------|----------|--------------------------------|
 | Noise | SNR 5 dB | 0.257 | 0.266 | **0.561** |
 | Noise | SNR 10 dB | 0.390 | 0.398 | **0.591** |
-| Low light | γ = 0.2 | 0.370 | 0.367 | **0.568** |
-| JPEG | *Q* = 10 | 0.348 | 0.367 | **0.622** |
+| Low light | γ = 0.2 | 0.353 | 0.348 | **0.568** |
+| JPEG | *Q* = 10 | 0.370 | 0.368 | **0.622** |
 
 Fine-tuned SegFormer on the robustness set **exceeds the clean baseline** (0.469 mIoU) at several noise and JPEG levels because adaptation specializes on distorted inputs while the frozen Cityscapes model is not optimal for undistorted BDD100K frames in this subset.
 
