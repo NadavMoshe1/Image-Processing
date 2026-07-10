@@ -107,7 +107,7 @@ All distortions are applied **synthetically** to clean images. Each type is swep
 
 ### Gaussian noise
 
-$$\mathrm{SNR\ (dB)} = 10 \log_{10}\!\left(\frac{P_{\mathrm{signal}}}{P_{\mathrm{noise}}}\right)$$
+$$\mathrm{SNR\ (dB)} = 10 \log_{10}\left(\frac{P_{\mathrm{signal}}}{P_{\mathrm{noise}}}\right)$$
 
 **Levels:** 30, 20, 10, 5 dB.
 
